@@ -53,8 +53,15 @@
     (define-key map "\C-c\C-c" 'sqlite3-mode-toggle-display)
     (define-key map "\C-c\C-q" 'sqlite3-mode-send-query)
     (define-key map "\C-x\C-s" 'sqlite3-mode-commit-changes)
+    (define-key map "\C-c\C-j" 'sqlite3-mode-jump-to-page)
     (define-key map "\C-c>" 'sqlite3-mode-forward-page)
     (define-key map "\C-c<" 'sqlite3-mode-backward-page)
+    (define-key map "\C-i" 'sqlite3-mode-forward-cell)
+    (define-key map "\e\C-i" 'sqlite3-mode-backward-cell)
+    (define-key map "h" 'sqlite3-mode-previous-column)
+    (define-key map "l" 'sqlite3-mode-next-column)
+    (define-key map "k" 'sqlite3-mode-previous-row)
+    (define-key map "j" 'sqlite3-mode-next-row)
     ;TODO
     (define-key map "\C-c\C-f" 'sqlite3-mode-narrow-down)
 
@@ -76,6 +83,8 @@
   ;;TODO
   (setq revert-buffer-function nil)
   (setq sqlite3-mode--current-page 0)
+  (add-hook 'post-command-hook
+            'sqlite3-mode--highlight-selected nil t)
   (use-local-map sqlite3-mode-map)
   ;;TODO
   (run-mode-hooks 'sqlite3-mode-hook))
@@ -96,21 +105,76 @@
   (interactive "sSQL: ")
   (sqlite3-mode--send-query query))
 
-(defun sqlite3-mode-forward-page ()
+(defun sqlite3-mode-jump-to-page (page)
   "TODO"
-  (interactive)
-  (unless (sqlite3-mode-draw-data
-           (1+ sqlite3-mode--current-page))
+  (interactive
+   (list (read-number "Page: ")))
+  (unless (sqlite3-mode-draw-data page)
     (error "No more next page")))
 
-(defun sqlite3-mode-backward-page ()
+(defun sqlite3-mode-forward-page (&optional arg)
   "TODO"
-  (interactive)
+  (interactive "p")
+  (unless (sqlite3-mode-draw-data
+           (+ sqlite3-mode--current-page arg))
+    (error "No more next page")))
+
+(defun sqlite3-mode-backward-page (&optional arg)
+  "TODO"
+  (interactive "p")
   (when (= sqlite3-mode--current-page 0)
     (error "This is a first page"))
-  (unless (sqlite3-mode-draw-data
-           (1- sqlite3-mode--current-page))
+  (unless (sqlite3-mode-draw-data 
+           (- sqlite3-mode--current-page arg))
     (error "No more previous page")))
+
+(defun sqlite3-mode-next-row (&optional arg)
+  "TODO"
+  (interactive "p")
+  (sqlite3-mode--move-line arg))
+
+(defun sqlite3-mode-previous-row (&optional arg)
+  "TODO"
+  (interactive "p")
+  (sqlite3-mode--move-line (- arg)))
+
+(defvar sqlite3-mode--moved-column nil)
+(defun sqlite3-mode--move-line (arg)
+  (let ((col (if (eq this-command last-command)
+                 sqlite3-mode--moved-column
+               (current-column))))
+    (setq sqlite3-mode--moved-column col)
+    (forward-line arg)
+    ;;TODO ok?
+    (move-to-column col)))
+
+(defun sqlite3-mode-next-column ()
+  "Goto next column."
+  (interactive)
+  (let ((next (sqlite3-mode--next-cell (point) t)))
+    (when next
+      (goto-char next))))
+
+(defun sqlite3-mode-previous-column ()
+  "Goto previous column."
+  (interactive)
+  (let ((prev (sqlite3-mode--previous-cell (point) t)))
+    (when prev
+      (goto-char prev))))
+
+(defun sqlite3-mode-forward-cell ()
+  "Forward cell over the row."
+  (interactive)
+  (let ((next (sqlite3-mode--next-cell (point))))
+    (when next
+      (goto-char next))))
+
+(defun sqlite3-mode-backward-cell ()
+  "Backward cell over the row."
+  (interactive)
+  (let ((prev (sqlite3-mode--previous-cell (point))))
+    (when prev
+      (goto-char prev))))
 
 ;;TODO name
 (defun sqlite3-mode-narrow-down ()
@@ -122,20 +186,94 @@
 ;;; `sqlite3-mode' functions
 ;;;
 
-(defun sqlite3-mode--format-text (text)
-  (pp-to-string text))
+(defvar sqlite3-mode--highlight-overlay nil)
+(make-variable-buffer-local 'sqlite3-mode--highlight-overlay)
+
+(defun sqlite3-mode--highlight-selected ()
+  (let ((ov (or sqlite3-mode--highlight-overlay
+                (let ((tmp (make-overlay (point-min) (point-min))))
+                  ;;TODo face
+                  (overlay-put tmp 'face 'match)
+                  tmp))))
+    (cond
+     ((memq ov (overlays-in (point) (1+ (point)))))
+     ((get-text-property (point) 'sqlite3-source-value (current-buffer))
+      (let* ((region (sqlite3-text-property-region (point) 'sqlite3-source-value))
+             (start (car region))
+             (end (cdr region)))
+        (move-overlay ov start end)
+        (setq sqlite3-mode--highlight-overlay ov)))
+     (t
+      (move-overlay ov (point-min) (point-min))))))
+
+(defun sqlite3-text-property-region (point property)
+  (let ((val (get-text-property point property)))
+    (and val
+         (let* ((start (previous-single-property-change 
+                        point property
+                        nil (line-beginning-position)))
+                (end (next-single-property-change
+                      point property 
+                      nil (line-end-position))))
+           (unless (eq (get-text-property start property) val)
+             (setq start (point)))
+           (unless (eq (get-text-property (1- end) property) val)
+             (setq end (point)))
+           (cons start end)))))
+
+(defun sqlite3-mode--previous-cell (point &optional current-line)
+  (let ((region (sqlite3-text-property-region point 'sqlite3-source-value)))
+    (cond
+     ((null region)
+      (previous-single-property-change
+       point 'sqlite3-source-value nil
+       (if current-line (line-beginning-position) (point-min))))
+     ((eq (car region) (point-min))
+      (point-min))
+     (t
+      (sqlite3-mode--previous-cell (1- (car region)) current-line)))))
+
+(defun sqlite3-mode--next-cell (point &optional current-line)
+  (let ((region (sqlite3-text-property-region point 'sqlite3-source-value)))
+    (next-single-property-change 
+     (or (cdr region) point) 
+     'sqlite3-source-value nil
+     (and current-line (line-end-position)))))
+
+(defun sqlite3-mode--data-to-text (object)
+  (pp-to-string object))
+
+(defun sqlite3-mode--format-text (width object)
+  (let ((text (sqlite3-mode--data-to-text object)))
+    (sqlite3-mode--truncate-text width text)))
+
+(defun sqlite3-mode--truncate-text (width text)
+  (truncate-string-to-width text width nil ?\s t))
+
+(defun sqlite3-mode--set-header (width-def header)
+  (setq header-line-format
+        ;; TODO
+        (concat " "
+                (mapconcat
+                 'identity
+                 (loop for w in (cdr width-def)
+                       for h in (cdr header)
+                       ;; TODO 2 double-quote
+                       collect (sqlite3-mode--truncate-text (+ w) h))
+                 " "))))
 
 ;;TODO
-(defun sqlite3-mode--insert-row (row)
+(defun sqlite3-mode--insert-row (width-def row)
   ;; (car row) is ROWID
   (loop for v in (cdr row)
+        for w in (cdr width-def)
         for i from 0
         do (progn
              (when (> i 0)
                (insert " "))
              (let ((start (point)))
-               (insert (sqlite3-mode--format-text v))
-               (put-text-property start (point) 'sqlite3-original v))))
+               (insert (sqlite3-mode--format-text w v))
+               (put-text-property start (point) 'sqlite3-source-value v))))
   (insert "\n"))
 
 (defun sqlite3-mode-open-table (table)
@@ -167,6 +305,7 @@
 (defun sqlite3-mode-draw-data (page)
   (save-excursion
     (let* ((where (or sqlite3-mode--current-cond "1 = 1"))
+           ;; TODO order by
            (query (format 
                    "SELECT ROWID, * FROM %s WHERE %s LIMIT %s OFFSET %s * %s"
                    sqlite3-mode--current-table
@@ -176,15 +315,30 @@
                    page))
            (data (sqlite3-mode-read-data query)))
       (when data
-        (let ((inhibit-read-only t))
+        (let ((inhibit-read-only t)
+              (width-def (sqlite3-mode--calculate-cell-width data)))
           (erase-buffer)
+          (sqlite3-mode--set-header width-def (car data))
           (mapc
            (lambda (row)
-             (sqlite3-mode--insert-row row))
-           data)
+             (sqlite3-mode--insert-row width-def row))
+           ;; ignore header row
+           (cdr data))
           (set-buffer-modified-p nil))
         (setq buffer-read-only t)
         (setq sqlite3-mode--current-page page)))))
+
+(defun sqlite3-mode--calculate-cell-width (data)
+  ;; decide list length by header line
+  (loop with all-width = (make-list (length (car data)) 0)
+        for row in data
+        do (loop for datum in row
+                 for pair on all-width
+                 for idx from 0
+                 do (let* ((text (sqlite3-mode--data-to-text datum))
+                           (wid (string-width text)))
+                      (setcar pair (max (car pair) wid))))
+        finally return all-width))
 
 (defvar sqlite3-mode--current-order nil)
 (make-variable-buffer-local 'sqlite3-mode--current-order)
