@@ -32,6 +32,7 @@
 
 ;;; TODO:
 ;; * incremental search
+;; * number to right.
 
 ;;; Code:
 
@@ -90,7 +91,14 @@
   (setq sqlite3-mode--current-page 0)
   (add-hook 'post-command-hook
             'sqlite3-mode--highlight-selected nil t)
+  (add-hook 'kill-buffer-hook 
+            'sqlite3-after-kill-buffer nil t)
   (use-local-map sqlite3-mode-map)
+  (sqlite3-mode-setup-mode-line)
+  (unless sqlite3-mode--popup-timer
+    (setq sqlite3-mode--popup-timer
+          (run-with-idle-timer 
+           1 t 'sqlite3-mode-popup-contents)))
   ;;TODO
   (run-mode-hooks 'sqlite3-mode-hook))
 
@@ -155,16 +163,6 @@
   ;;TODO prev page
   )
 
-(defvar sqlite3-mode--moved-column nil)
-(defun sqlite3-mode--move-line (arg)
-  (let ((col (if (memq last-command 
-                       '(sqlite3-mode-previous-row sqlite3-mode-next-row))
-                 sqlite3-mode--moved-column
-               (current-column))))
-    (setq sqlite3-mode--moved-column col)
-    (forward-line arg)
-    (move-to-column col)))
-
 (defun sqlite3-mode-next-column ()
   "Goto next column."
   (interactive)
@@ -202,6 +200,113 @@
 ;;;
 ;;; `sqlite3-mode' functions
 ;;;
+
+(defvar sqlite3-mode--popup-timer nil)
+
+(defun sqlite3-mode--cleanup-timer ()
+  (when sqlite3-mode--popup-timer
+    (loop for b in (buffer-list)
+          if (and (eq (buffer-local-value 'major-mode b) 'sqlite3-mode)
+                  (buffer-live-p b))
+          return t
+          finally (progn 
+                    (cancel-timer sqlite3-mode--popup-timer)
+                    (setq sqlite3-mode--popup-timer nil)))))
+
+(defun sqlite3-mode-current-value ()
+  (or 
+   (get-text-property (point) 'sqlite3-edit-value)
+   (get-text-property (point) 'sqlite3-source-value)))
+
+(defun sqlite3-mode-popup-contents ()
+  (save-match-data
+    ;;TODO only show current cell exceed window.
+    (when (and (eq major-mode 'sqlite3-mode)
+               ;; suppress tooltip if last command were C-g
+               (not (eq last-command 'keyboard-quit)))
+      (sqlite3-tooltip-show (sqlite3-mode-current-value)))))
+
+(defconst sqlite3-mode-line-format
+  '(
+    (:eval
+     (let ((status (sqlite3-mode-stream-status)))
+       (cond
+        ((eq status 'prompt)
+         (propertize " Run" 'face 'compilation-info))
+        ((eq status 'querying)
+         (propertize " Querying" 'face 'compilation-warning))
+        (t
+         (propertize " No Process" 'face 'shadow)))))))
+
+(defun sqlite3-mode-setup-mode-line ()
+  ;; (or (assq (caar sqlite3-mode-line-format) mode-line-process)
+  ;;     (setq mode-line-process
+  ;;           (append sqlite3-mode-line-format
+  ;;                   mode-line-process)))
+  (setq mode-line-process
+        (append sqlite3-mode-line-format
+                mode-line-process))
+  )
+
+(defun sqlite3-tooltip-show (text)
+  ;; show tooltip at cursor point.
+  ;; Unable calculate exactly absolute coord but almost case is ok.
+  ;;TODO consider `x-max-tooltip-size'
+  (let* ((xy (sqlite3-tooltip-absolute-coordinate (point)))
+         (y
+          (cond
+           ((< (/ (ftruncate (cdr xy)) (x-display-pixel-height)) 0.2)
+            (+ (cdr xy) (* (frame-char-height) 3)))
+           (t
+            (cdr xy)))))
+    (x-show-tip 
+     text nil 
+     `((left . ,(car xy))
+       (top . ,y))
+     ;; huge timeout value
+     100000)))
+
+(defun sqlite3-tooltip-absolute-coordinate (point)
+  (let* ((posn (posn-at-point point))
+         (xy (posn-x-y posn))
+         (x (+ (sqlite3-mode-tooltip-frame-posn 'top) 
+               (car xy)))
+         (y (truncate
+             (+ (sqlite3-mode-tooltip-frame-posn 'left)
+                (cdr xy)
+                ;; FIXME calculate fringe of bar roughly..
+                (* (or (and tool-bar-mode tool-bar-images-pixel-height) 0)
+                   1.5)
+                (* (or (and menu-bar-mode (frame-char-height)) 0)
+                   1.5)))))
+    (cons x y)))
+
+(defun sqlite3-tooltip-frame-posn (prop)
+  (let ((res (cdr (assq prop (frame-parameters)))))
+    (or
+     (cond
+      ((consp res)
+       (loop for o in res
+             if (numberp o)
+             return o))
+      (t
+       res))
+     0)))
+
+(defun sqlite3-after-kill-buffer ()
+  (when sqlite3-mode--stream
+    (sqlite3-stream-close sqlite3-mode--stream))
+  (sqlite3-mode--cleanup-timer))
+
+(defvar sqlite3-mode--moved-column nil)
+(defun sqlite3-mode--move-line (arg)
+  (let ((col (if (memq last-command 
+                       '(sqlite3-mode-previous-row sqlite3-mode-next-row))
+                 sqlite3-mode--moved-column
+               (current-column))))
+    (setq sqlite3-mode--moved-column col)
+    (forward-line arg)
+    (move-to-column col)))
 
 (defvar sqlite3-mode--highlight-overlay nil)
 (make-variable-buffer-local 'sqlite3-mode--highlight-overlay)
@@ -275,13 +380,6 @@
   "*Face to fontify background of header line."
   :group 'faces)
 
-(defvar sqlite3-header-column-separator
-  (let ((sep " "))
-    (sqlite3-header-background-propertize sep)
-    (propertize sep 'display 
-                '(space :width 1)))
-  "String used to separate tabs.")
-
 (defun sqlite3-header-background-propertize (string)
   (let ((end (length string)))
     (add-text-properties 0 end 
@@ -291,18 +389,28 @@
                          string)
     string))
 
+(defvar sqlite3-header-column-separator
+  (let ((sep " "))
+    (sqlite3-header-background-propertize sep)
+    (propertize sep 'display 
+                '(space :width 1)))
+  "String used to separate tabs.")
+
 (defun sqlite3-mode--set-header (width-def header)
-  (let* ((right (+ (length (cdr width-def)) (length (cdr width-def))))
-         (filler (make-string (- (frame-width) right) ?\s))
+  (let* ((disp-headers 
+          (loop for w in (cdr width-def)
+                for h in (cdr header)
+                collect (sqlite3-mode--truncate-text (+ w) h)))
+         (right (+ (length (cdr width-def)) (length (cdr width-def))))
+         (filler (make-string (max (- (frame-width) right) 0) ?\s))
          (tail (sqlite3-header-background-propertize filler)))
+    ;;TODO exceed window-width and scroll left
     (setq header-line-format
           (list 
            sqlite3-header-column-separator
            (mapconcat
             'identity
-            (loop for w in (cdr width-def)
-                  for h in (cdr header)
-                  collect (sqlite3-mode--truncate-text (+ w) h))
+            disp-headers
             sqlite3-header-column-separator)
            tail))))
 
@@ -327,7 +435,7 @@
                        "Table: "
                        (mapcar
                         (lambda (x) (car x))
-                        (sqlite3-mode-read-data sqlite3-select-table-query)))))
+                        (sqlite3-mode-read-data sqlite3-select-table-query t)))))
                  (list table)))
   (unless (sqlite3-mode-draw-page table 0)
     (error "No data")))
@@ -343,9 +451,12 @@
     (setq sqlite3-mode--stream
           (sqlite3-stream-open buffer-file-name))))
 
-(defun sqlite3-mode-read-data (query)
+(defun sqlite3-mode-read-data (query &optional ommit-header)
   (sqlite3-mode--check-stream)
-  (sqlite3-stream--read-result sqlite3-mode--stream query))
+  (let ((data (sqlite3-stream--read-result sqlite3-mode--stream query)))
+    (if ommit-header
+        (cdr data)
+      data)))
 
 (defun sqlite3-mode-draw-page (table page)
   (save-excursion
@@ -387,6 +498,16 @@
                            (wid (string-width text)))
                       (setcar pair (max (car pair) wid))))
         finally return all-width))
+
+(defun sqlite3-mode-stream-status ()
+  (let ((stream sqlite3-mode--stream))
+    (cond
+     ((null stream) 'exit)
+     ((not (eq (process-status stream) 'run)) 'exit)
+     ((with-current-buffer (process-buffer stream)
+        (sqlite3--prompt-waiting-p))
+      'prompt)
+     (t 'querying))))
 
 (defvar sqlite3-mode--current-order nil)
 (make-variable-buffer-local 'sqlite3-mode--current-order)
