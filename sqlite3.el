@@ -52,17 +52,21 @@
 (defvar sqlite3-mode-map nil)
 
 (unless sqlite3-mode-map
-  (let ((map (make-sparse-keymap)))
+  ;;TODO or is testing
+  (let ((map (or sqlite3-mode-map (make-sparse-keymap))))
 
+    (suppress-keymap map)
     (define-key map "\C-c\C-c" 'sqlite3-mode-toggle-display)
     (define-key map "\C-c\C-q" 'sqlite3-mode-send-query)
     (define-key map "\C-x\C-s" 'sqlite3-mode-commit-changes)
     (define-key map "\C-c\C-j" 'sqlite3-mode-jump-to-page)
+    (define-key map "\C-c\C-n" 'sqlite3-mode-new-row)
     (define-key map "\C-c>" 'sqlite3-mode-forward-page)
     (define-key map "\C-c<" 'sqlite3-mode-backward-page)
     (define-key map "\C-i" 'sqlite3-mode-forward-cell)
     (define-key map "\e\C-i" 'sqlite3-mode-backward-cell)
     (define-key map "\C-m" 'sqlite3-mode-start-edit)
+    (define-key map "g" 'revert-buffer)
     (define-key map "h" 'sqlite3-mode-previous-column)
     (define-key map "l" 'sqlite3-mode-next-column)
     (define-key map "k" 'sqlite3-mode-previous-row)
@@ -86,9 +90,10 @@
   (setq buffer-undo-list t)
   (setq truncate-lines t)
   (setq backup-inhibited t)
-  ;;TODO
-  (setq revert-buffer-function nil)
+  (setq revert-buffer-function
+        'sqlite3-mode-revert-buffer)
   (setq sqlite3-mode--current-page 0)
+  (setq sqlite3-mode--current-table nil)
   (add-hook 'post-command-hook
             'sqlite3-mode--highlight-selected nil t)
   (add-hook 'kill-buffer-hook 
@@ -99,13 +104,24 @@
     (setq sqlite3-mode--popup-timer
           (run-with-idle-timer 
            1 t 'sqlite3-mode-popup-contents)))
-  ;;TODO
   (run-mode-hooks 'sqlite3-mode-hook))
 
-;;TODO
 (defun sqlite3-mode-start-edit ()
+  "Edit current cell with opening subwindow."
   (interactive)
-  )
+  (let ((value (sqlite3-mode-current-value)))
+    (unless value
+      (error "No cell is here"))
+    (let ((new (sqlite3-mode-open-edit-window value))
+          (region (or (sqlite3-text-property-region 
+                       (point) 'sqlite3-edit-value)
+                      (sqlite3-text-property-region
+                       (point) 'sqlite3-source-value))))
+      (let ((inhibit-read-only t))
+        ;;TODO redisplay
+        (put-text-property 
+         (car region) (cdr region) 'sqlite3-edit-value
+         new)))))
 
 ;;TODO
 (defun sqlite3-mode-commit-changes ()
@@ -228,6 +244,12 @@
 
 (defconst sqlite3-mode-line-format
   '(
+    (sqlite3-mode--current-table
+     (:eval
+      (concat " [" 
+              (propertize sqlite3-mode--current-table 
+                          'face 'mode-line-emphasis)
+              "]")))
     (:eval
      (let ((status (sqlite3-mode-stream-status)))
        (cond
@@ -239,14 +261,27 @@
          (propertize " No Process" 'face 'shadow)))))))
 
 (defun sqlite3-mode-setup-mode-line ()
-  ;; (or (assq (caar sqlite3-mode-line-format) mode-line-process)
-  ;;     (setq mode-line-process
-  ;;           (append sqlite3-mode-line-format
-  ;;                   mode-line-process)))
-  (setq mode-line-process
-        (append sqlite3-mode-line-format
-                mode-line-process))
-  )
+  (setq mode-line-process sqlite3-mode-line-format))
+
+(defconst sqlite3-mode-edit-buffer " *Sqlite3 Edit*")
+
+(defun sqlite3-mode-open-edit-window (value)
+  (let ((buf (get-buffer-create sqlite3-mode-edit-buffer)))
+    (let ((config (current-window-configuration)))
+      (with-current-buffer buf
+        (let ((inhibit-read-only t))
+          (erase-buffer))
+        (insert value)
+        (setq buffer-undo-list nil)
+        (set-buffer-modified-p nil))
+      (pop-to-buffer buf)
+      (message "%s"
+               (substitute-command-keys 
+                "Type \\[exit-recursive-edit] to finish the edit."))
+      (recursive-edit)
+      (let ((new-value (buffer-string)))
+        (set-window-configuration config)
+        new-value))))
 
 (defun sqlite3-tooltip-show (text)
   ;; show tooltip at cursor point.
@@ -269,10 +304,10 @@
 (defun sqlite3-tooltip-absolute-coordinate (point)
   (let* ((posn (posn-at-point point))
          (xy (posn-x-y posn))
-         (x (+ (sqlite3-mode-tooltip-frame-posn 'top) 
+         (x (+ (sqlite3-tooltip-frame-posn 'top) 
                (car xy)))
          (y (truncate
-             (+ (sqlite3-mode-tooltip-frame-posn 'left)
+             (+ (sqlite3-tooltip-frame-posn 'left)
                 (cdr xy)
                 ;; FIXME calculate fringe of bar roughly..
                 (* (or (and tool-bar-mode tool-bar-images-pixel-height) 0)
@@ -362,8 +397,11 @@
      'sqlite3-source-value nil
      (and current-line (line-end-position)))))
 
-(defun sqlite3-mode--data-to-text (object)
-  (pp-to-string object))
+(defun sqlite3-mode--data-to-text (string)
+  (or
+   (and (string-match "^\\([^\n]+\\)" string)
+        (match-string 1 string))
+   string))
 
 (defun sqlite3-mode--format-text (width object)
   (let ((text (sqlite3-mode--data-to-text object)))
@@ -426,19 +464,27 @@
              (let ((start (point)))
                (insert (sqlite3-mode--format-text w v))
                (put-text-property start (point) 'sqlite3-source-value v))))
+  (put-text-property
+   (line-beginning-position) (line-end-position)
+   'sqlite3-rowid (car row))
   (insert "\n"))
 
 ;;TODO hack function make obsolete later
 (defun sqlite3-mode-open-table (table)
-  (interactive (let ((table
-                      (completing-read
-                       "Table: "
-                       (mapcar
-                        (lambda (x) (car x))
-                        (sqlite3-mode-read-data sqlite3-select-table-query t)))))
-                 (list table)))
+  (interactive 
+   (let ((table (sqlite3-mode--read-table)))
+     (list table)))
   (unless (sqlite3-mode-draw-page table 0)
     (error "No data")))
+
+(defvar sqlite3-mode-read-table-history nil)
+(defun sqlite3-mode--read-table ()
+  (completing-read
+   "Table: "
+   (mapcar
+    (lambda (x) (car x))
+    (sqlite3-mode-read-data sqlite3-select-table-query t))
+   nil t nil 'sqlite3-mode-read-table-history))
 
 (defun sqlite3-mode--send-query (query)
   (sqlite3-mode--check-stream)
@@ -461,9 +507,13 @@
 (defun sqlite3-mode-draw-page (table page)
   (save-excursion
     (let* ((where (or sqlite3-mode--current-cond "1 = 1"))
-           ;; TODO order by
+           (order "ROWID") ;; TODO order by
            (query (format 
-                   "SELECT ROWID, * FROM %s WHERE %s LIMIT %s OFFSET %s * %s"
+                   (concat "SELECT ROWID, *"
+                           " FROM %s"
+                           " WHERE %s"
+                           " LIMIT %s OFFSET %s * %s"
+                           )
                    table where
                    sqlite3-mode--maximum
                    sqlite3-mode--maximum
@@ -489,7 +539,7 @@
 
 (defun sqlite3-mode--calculate-cell-width (data)
   ;; decide list length by header line
-  (loop with all-width = (make-list (length (car data)) 0)
+  (loop with all-width = (make-list (length (car data)) 3)
         for row in data
         do (loop for datum in row
                  for pair on all-width
@@ -508,6 +558,11 @@
         (sqlite3--prompt-waiting-p))
       'prompt)
      (t 'querying))))
+
+(defvar sqlite3-mode--context nil)
+(make-variable-buffer-local 'sqlite3-mode--context)
+
+;;TODO this local variable to one context variable?
 
 (defvar sqlite3-mode--current-order nil)
 (make-variable-buffer-local 'sqlite3-mode--current-order)
@@ -599,6 +654,10 @@
   (let ((proc stream))
     (unless (process-get proc 'sqlite3-stream-process-p)
       (error "Not a sqlite3 process"))
+    (with-timeout (5 (kill-process proc))
+      (process-send-string proc ".quit\n")
+      (while (eq (process-status proc) 'run)
+        (sit-for 0.1)))
     (delete-process stream)))
 
 (defun sqlite3-stream--create-buffer ()
@@ -734,9 +793,14 @@ Good: SELECT * FROM table1;
       (setq buf (create-file-buffer (file-name-nondirectory db-file)))
       (with-current-buffer buf
         (set-visited-file-name db-file)
-        (set-buffer-modified-p nil)))
-    (switch-to-buffer buf)
-    (sqlite3-mode)))
+        (set-buffer-modified-p nil)
+        (sqlite3-mode)))
+    (switch-to-buffer buf)))
+
+(defun sqlite3-mode-revert-buffer (&rest dummy)
+  (sqlite3-mode-draw-page 
+   sqlite3-mode--current-table
+   sqlite3-mode--current-page))
 
 (defun sqlite3-file-guessed-valid-p (file)
   (with-temp-buffer
@@ -750,6 +814,7 @@ Good: SELECT * FROM table1;
     (looking-at "^sqlite> \\'")))
 
 (defun sqlite3--read-csv-with-deletion ()
+  "Read csv data from current point. Delete csv data if read was succeeded."
   (let ((pcsv-quoted-value-regexp  (pcsv-quoted-value-regexp))
         (pcsv-value-regexp (pcsv-value-regexp))
         pcsv-eobp res)
@@ -860,7 +925,8 @@ Elements of the item list are:
     (unwind-protect
         (progn
           (should (sqlite3-stream--send-query stream "CREATE TABLE hoge (id INTEGER PRIMARY KEY, text TEXT)"))
-          (should (equal (sqlite3-db-table-columns db "hoge") '("id" "text")))
+          (should (equal (sqlite3-db-table-info db "hoge") 
+                         '((0 "id" "INTEGER" nil "" t) (1 "text" "TEXT" nil "" nil))))
           (should (sqlite3-stream--send-query stream "INSERT INTO hoge VALUES (1, 'a')"))
           (should (sqlite3-stream--send-query stream "INSERT INTO hoge VALUES (2, 'b')"))
           (should (equal (sqlite3-stream--read-result
@@ -869,8 +935,26 @@ Elements of the item list are:
           (should (sqlite3-stream--send-query stream "UPDATE hoge SET id = id + 10, text = text || 'z'"))
           (should (equal
                    (sqlite3-stream--read-result stream "SELECT * FROM hoge")
-                   '(("id" "text") ("11" "az") ("12" "bz")))))
+                   '(("id" "text") ("11" "az") ("12" "bz"))))
+          (should (sqlite3-stream--send-query stream "DELETE FROM hoge WHERE id = 11"))
+          (should (equal
+                   (sqlite3-stream--read-result stream "SELECT * FROM hoge")
+                   '(("id" "text") ("12" "bz"))))
+          )
       (sqlite3-stream-close stream))))
 
+(ert-deftest sqlite3-irregular-0001 ()
+  :tags '(sqlite3)
+  (let* ((db (make-temp-file "sqlite3-test-"))
+         (stream (sqlite3-stream-open db)))
+    (unwind-protect
+        (progn
+          (sqlite3-stream--send-query stream "CREATE TABLE hoge (id INTEGER PRIMARY KEY)")
+          (should-error (sqlite3-stream--send-query stream "CREATE TABLE1"))
+          (should-error (sqlite3-stream--send-query stream "CREATE TABLE hoge (id INTEGER PRIMARY KEY)"))
+          (sqlite3-stream--send-query stream "INSERT INTO hoge VALUES (1)")
+          (should-error (sqlite3-stream--send-query stream "INSERT INTO hoge VALUES (1)"))
+          )
+      (sqlite3-stream-close stream))))
 
 ;;; sqlite3.el ends here
