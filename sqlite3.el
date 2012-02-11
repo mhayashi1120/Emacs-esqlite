@@ -26,6 +26,10 @@
 
 ;; TODO
 
+;; * Specification
+;; allow invalid character in data.
+;; disallow invalid character in column and table.
+
 ;;; Install:
 
 ;;TODO
@@ -33,6 +37,9 @@
 ;;; TODO:
 ;; * incremental search
 ;; * number to right.
+;; * blob
+;; * check sqlite3 command is exists.
+;; * windows
 
 ;;; Code:
 
@@ -56,6 +63,7 @@
   (let ((map (or sqlite3-mode-map (make-sparse-keymap))))
 
     (suppress-keymap map)
+
     (define-key map "\C-c\C-c" 'sqlite3-mode-toggle-display)
     (define-key map "\C-c\C-q" 'sqlite3-mode-send-query)
     (define-key map "\C-x\C-s" 'sqlite3-mode-commit-changes)
@@ -84,6 +92,8 @@
 
 (defun sqlite3-mode ()
   (interactive)
+  (unless buffer-file-name
+    (error "Not a file buffer"))
   (kill-all-local-variables)
   (setq major-mode 'sqlite3-mode)
   (setq mode-name "Sqlite3")
@@ -94,15 +104,17 @@
         'sqlite3-mode-revert-buffer)
   (setq sqlite3-mode--current-page 0)
   (setq sqlite3-mode--current-table nil)
+  (set-visited-file-modtime
+   (nth 5 (file-attributes buffer-file-name)))
   (add-hook 'post-command-hook
-            'sqlite3-mode--highlight-selected nil t)
-  (add-hook 'kill-buffer-hook 
+            'sqlite3-mode--post-command nil t)
+  (add-hook 'kill-buffer-hook
             'sqlite3-after-kill-buffer nil t)
   (use-local-map sqlite3-mode-map)
   (sqlite3-mode-setup-mode-line)
   (unless sqlite3-mode--popup-timer
     (setq sqlite3-mode--popup-timer
-          (run-with-idle-timer 
+          (run-with-idle-timer
            1 t 'sqlite3-mode-popup-contents)))
   (run-mode-hooks 'sqlite3-mode-hook))
 
@@ -112,21 +124,26 @@
   (let ((value (sqlite3-mode-current-value)))
     (unless value
       (error "No cell is here"))
+    (unless (eq (sqlite3-mode-stream-status) 'transaction)
+      (sqlite3-mode--transaction-begin))
     (let ((new (sqlite3-mode-open-edit-window value))
           (region (or (sqlite3-text-property-region 
                        (point) 'sqlite3-edit-value)
                       (sqlite3-text-property-region
                        (point) 'sqlite3-source-value))))
       (let ((inhibit-read-only t))
-        ;;TODO redisplay
-        (put-text-property 
-         (car region) (cdr region) 'sqlite3-edit-value
-         new)))))
+        (unless (equal value new)
+          ;;TODO redisplay
+          (put-text-property 
+           (car region) (cdr region) 'sqlite3-edit-value
+           new))))))
 
 ;;TODO
 (defun sqlite3-mode-commit-changes ()
   (interactive)
-  )
+  (condition-case nil
+      (sqlite3-mode--transaction-commit)
+    (sqlite3-mode--transaction-rollback)))
 
 ;;TODO
 ;; raw-data <-> table-view
@@ -255,6 +272,8 @@
        (cond
         ((eq status 'prompt)
          (propertize " Run" 'face 'compilation-info))
+        ((eq status 'transaction)
+         (propertize " Transaction" 'face 'compilation-info))
         ((eq status 'querying)
          (propertize " Querying" 'face 'compilation-warning))
         (t
@@ -266,22 +285,22 @@
 (defconst sqlite3-mode-edit-buffer " *Sqlite3 Edit*")
 
 (defun sqlite3-mode-open-edit-window (value)
-  (let ((buf (get-buffer-create sqlite3-mode-edit-buffer)))
-    (let ((config (current-window-configuration)))
-      (with-current-buffer buf
-        (let ((inhibit-read-only t))
-          (erase-buffer))
-        (insert value)
-        (setq buffer-undo-list nil)
-        (set-buffer-modified-p nil))
-      (pop-to-buffer buf)
-      (message "%s"
-               (substitute-command-keys 
-                "Type \\[exit-recursive-edit] to finish the edit."))
-      (recursive-edit)
-      (let ((new-value (buffer-string)))
-        (set-window-configuration config)
-        new-value))))
+  (let ((buf (get-buffer-create sqlite3-mode-edit-buffer))
+        (config (current-window-configuration)))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer))
+      (insert value)
+      (setq buffer-undo-list nil)
+      (set-buffer-modified-p nil))
+    (pop-to-buffer buf)
+    (message "%s"
+             (substitute-command-keys 
+              "Type \\[exit-recursive-edit] to finish the edit."))
+    (recursive-edit)
+    (let ((new-value (buffer-string)))
+      (set-window-configuration config)
+      new-value)))
 
 (defun sqlite3-tooltip-show (text)
   ;; show tooltip at cursor point.
@@ -343,12 +362,20 @@
     (forward-line arg)
     (move-to-column col)))
 
+(defun sqlite3-mode--post-command ()
+  (condition-case err
+      (progn
+        (sqlite3-mode--highlight-selected)
+        (sqlite3-mode--delayed-draw-header))
+    (error
+     (message "%s" err))))
+
 (defvar sqlite3-mode--highlight-overlay nil)
 (make-variable-buffer-local 'sqlite3-mode--highlight-overlay)
 
 (defun sqlite3-mode--highlight-selected ()
   (let ((ov (or sqlite3-mode--highlight-overlay
-                (let ((tmp (make-overlay (point-min) (point-min))))
+                (let ((tmp (make-overlay (point-max) (point-max))))
                   ;;TODo face
                   (overlay-put tmp 'face 'match)
                   tmp))))
@@ -361,7 +388,7 @@
         (move-overlay ov start end)
         (setq sqlite3-mode--highlight-overlay ov)))
      (t
-      (move-overlay ov (point-min) (point-min))))))
+      (move-overlay ov (point-max) (point-max))))))
 
 (defun sqlite3-text-property-region (point property)
   (let ((val (get-text-property point property)))
@@ -435,24 +462,53 @@
   "String used to separate tabs.")
 
 (defun sqlite3-mode--set-header (width-def header)
-  (let* ((disp-headers 
-          (loop for w in (cdr width-def)
-                for h in (cdr header)
-                collect (sqlite3-mode--truncate-text (+ w) h)))
-         (right (+ (length (cdr width-def)) (length (cdr width-def))))
-         (filler (make-string (max (- (frame-width) right) 0) ?\s))
-         (tail (sqlite3-header-background-propertize filler)))
-    ;;TODO exceed window-width and scroll left
-    (setq header-line-format
-          (list 
-           sqlite3-header-column-separator
-           (mapconcat
-            'identity
-            disp-headers
-            sqlite3-header-column-separator)
-           tail))))
+  (setq sqlite3-mode--header
+        (loop for w in (cdr width-def)
+              for h in (cdr header)
+              collect (list h w))))
 
-;;TODO
+(defvar sqlite3-mode--header nil)
+(make-variable-buffer-local 'sqlite3-mode--header)
+
+(defvar sqlite3-mode--previous-hscroll nil)
+(make-variable-buffer-local 'sqlite3-mode--previous-hscroll)
+
+(defun sqlite3-mode--delayed-draw-header (&optional force)
+  (when force
+    (setq sqlite3-mode--previous-hscroll nil))
+  (cancel-function-timers 'sqlite3-mode--draw-header)
+  ;; in the `post-command-hook', `window-hscroll' still return previous value.
+  ;; although after calling `scroll-right' return correct value.
+  (run-with-timer 0.1 nil 'sqlite3-mode--draw-header))
+
+(defun sqlite3-mode--draw-header ()
+  (unless (eq sqlite3-mode--previous-hscroll (window-hscroll))
+    (setq sqlite3-mode--previous-hscroll (window-hscroll))
+    (let* ((disp-headers 
+            (loop with hscroll = (window-hscroll)
+                  with flag
+                  for (h w) in sqlite3-mode--header
+                  sum (1+ w) into right
+                  if (<= hscroll right)
+                  collect (let ((wid w))
+                            (unless flag
+                              (setq wid (- right hscroll 1)))
+                            (setq flag t)
+                            (if (< wid 3)
+                                (sqlite3-mode--truncate-text wid "")
+                              (sqlite3-mode--truncate-text wid h)))))
+           (filler (make-string (frame-width) ?\s))
+           (tail (sqlite3-header-background-propertize filler)))
+      (setq header-line-format
+            (and disp-headers
+                 (list 
+                  sqlite3-header-column-separator
+                  (mapconcat
+                   'identity
+                   disp-headers
+                   sqlite3-header-column-separator)
+                  tail))))))
+
 (defun sqlite3-mode--insert-row (width-def row)
   ;; (car row) is ROWID
   (loop for v in (cdr row)
@@ -507,17 +563,18 @@
 (defun sqlite3-mode-draw-page (table page)
   (save-excursion
     (let* ((where (or sqlite3-mode--current-cond "1 = 1"))
-           (order "ROWID") ;; TODO order by
+           (order "") ;; TODO order by
+           (order-by "")                ;TODO
            (query (format 
                    (concat "SELECT ROWID, *"
                            " FROM %s"
                            " WHERE %s"
                            " LIMIT %s OFFSET %s * %s"
-                           )
+                           "%s")
                    table where
                    sqlite3-mode--maximum
                    sqlite3-mode--maximum
-                   page))
+                   page order-by))
            (data (sqlite3-mode-read-data query)))
       (cond
        ((or data
@@ -526,6 +583,7 @@
         (let ((inhibit-read-only t)
               (width-def (sqlite3-mode--calculate-cell-width data)))
           (erase-buffer)
+          (remove-overlays (point-min) (point-max))
           (sqlite3-mode--set-header width-def (car data))
           (mapc
            (lambda (row)
@@ -534,7 +592,9 @@
            (cdr data))
           (set-buffer-modified-p nil))
         (setq buffer-read-only t)
-        (setq sqlite3-mode--current-page page))
+        (setq sqlite3-mode--current-page page)
+        ;; redraw header forcibly
+        (sqlite3-mode--delayed-draw-header t))
        (t nil)))))
 
 (defun sqlite3-mode--calculate-cell-width (data)
@@ -546,7 +606,7 @@
                  for idx from 0
                  do (let* ((text (sqlite3-mode--data-to-text datum))
                            (wid (string-width text)))
-                      (setcar pair (max (car pair) wid))))
+                      (setcar pair (min (max (car pair) wid) 30))))
         finally return all-width))
 
 (defun sqlite3-mode-stream-status ()
@@ -556,7 +616,11 @@
      ((not (eq (process-status stream) 'run)) 'exit)
      ((with-current-buffer (process-buffer stream)
         (sqlite3--prompt-waiting-p))
-      'prompt)
+      (cond
+       ((process-get stream 'sqlite3-mode-transaction)
+        'transaction)
+       (t
+        'prompt)))
      (t 'querying))))
 
 (defvar sqlite3-mode--context nil)
@@ -577,6 +641,25 @@
 (make-variable-buffer-local 'sqlite3-mode--current-page)
 
 (defvar sqlite3-mode--maximum 100)
+
+(defun sqlite3-mode--transaction-begin ()
+  (let ((stream sqlite3-mode--stream))
+    (unless (verify-visited-file-modtime (current-buffer))
+      (error "Database was modified after open"))
+    (sqlite3-stream--send-query stream "BEGIN")
+    (process-put stream 'sqlite3-mode-transaction t)))
+
+(defun sqlite3-mode--transaction-rollback ()
+  (let ((stream sqlite3-mode--stream))
+    ;;TODO file modtime do-suru?
+    (sqlite3-stream--send-query stream "ROLLBACK")
+    (process-put stream 'sqlite3-mode-transaction nil)))
+
+(defun sqlite3-mode--transaction-commit ()
+  (let ((stream sqlite3-mode--stream))
+    ;;TODO file modtime do-suru?
+    (sqlite3-stream--send-query stream "COMMIT")
+    (process-put stream 'sqlite3-mode-transaction nil)))
 
 (defun sqlite3--update-query (table columns rowid row)
   (format "UPDATE %s SET %s WHERE ROWID = %s;"
@@ -787,7 +870,6 @@ Good: SELECT * FROM table1;
   (interactive "FSqlite3 File: ")
   (unless (sqlite3-file-guessed-valid-p db-file)
     (error "Not a valid database file"))
-  ;;TODO
   (let ((buf (get-file-buffer db-file)))
     (unless buf
       (setq buf (create-file-buffer (file-name-nondirectory db-file)))
