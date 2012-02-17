@@ -770,10 +770,14 @@ If changed data violate database constraint, transaction will be rollback.
 
 (defun sqlite3-mode--insert-cell (value)
   (let* ((start (point))
-         (column (sqlite3-mode--column-index))
-         (wid (nth 2 (nth column sqlite3-mode--header)))
-         (truncated (sqlite3-mode--truncate-insert (or value "") wid)))
+         (col (sqlite3-mode--column-index))
+         (column (nth col sqlite3-mode--header))
+         (wid (nth 2 (nth col sqlite3-mode--header)))
+         (truncated (sqlite3-mode--truncate-insert (or value "") wid))
+         (cell `(nil :edit-value nil :truncated ,truncated
+                     :column ,column)))
     (let ((end (point)))
+      (put-text-property start end 'sqlite3-mode-cell cell)
       (put-text-property start end 'sqlite3-mode-truncated truncated)
       (cons start end))))
 
