@@ -149,7 +149,8 @@
     (unless (eq (sqlite3-mode-stream-status) 'transaction)
       (sqlite3-mode--transaction-begin))
     (sqlite3-mode--update-with-handler
-     (let* ((rowid (get-text-property (point) 'sqlite3-rowid))
+     (let* ((row (get-text-property (point) 'sqlite3-mode-row))
+            (rowid (plist-get (cdr row) :rowid))
             (query (sqlite3-mode--delete-query rowid)))
        (message "Deleting...")
        (sqlite3-mode-read-data query)   ; no read wait until prompt.
@@ -171,11 +172,8 @@
     (unless (verify-visited-file-modtime (current-buffer))
       (error "Database was modified after open"))
     (let* ((pos (point))
-           (region (or 
-                    (sqlite3-text-property-region 
-                     pos 'sqlite3-edit-value)
-                    (sqlite3-text-property-region
-                     pos 'sqlite3-source-value)))
+           (region (sqlite3-text-property-region
+                    pos 'sqlite3-mode-cell))
            (new (sqlite3-mode-open-edit-window value)))
       (unless (equal value new)
         (let ((inhibit-read-only t))
@@ -329,9 +327,10 @@ If changed data violate database constraint, transaction will be rollback.
                     (setq sqlite3-mode--popup-timer nil)))))
 
 (defun sqlite3-mode-current-value ()
-  (or 
-   (get-text-property (point) 'sqlite3-edit-value)
-   (get-text-property (point) 'sqlite3-source-value)))
+  (let ((cell (get-text-property (point) 'sqlite3-mode-cell)))
+    (or 
+     (plist-get (cdr cell) :edit-value)
+     (plist-get (cdr cell) :source-value))))
 
 (defun sqlite3-mode-popup-contents ()
   (save-match-data
@@ -339,8 +338,10 @@ If changed data violate database constraint, transaction will be rollback.
     (when (and (eq major-mode 'sqlite3-mode)
                ;; suppress tooltip if last command were C-g
                (not (eq last-command 'keyboard-quit)))
-      (when (get-text-property (point) 'sqlite3-mode-truncated)
-        (sqlite3-tooltip-show (sqlite3-mode-current-value))))))
+      (let ((cell (get-text-property (point) 'sqlite3-mode-cell)))
+        (when (plist-get cell :truncated)
+          ;;TODO current-value
+          (sqlite3-tooltip-show (sqlite3-mode-current-value)))))))
 
 (defconst sqlite3-mode-line-format
   '(
@@ -483,13 +484,14 @@ If changed data violate database constraint, transaction will be rollback.
 (make-variable-buffer-local 'sqlite3-mode--previous-row)
 
 (defun sqlite3-mode--pre-handle-rowid ()
-  (setq sqlite3-mode--previous-row (sqlite3-mode-current-row)))
+  (setq sqlite3-mode--previous-row
+        (get-text-property (point) 'sqlite3-mode-row)))
 
 (defun sqlite3-mode--post-change-row ()
   (when sqlite3-mode--previous-row
     ;;TODO row have error that must have insert.
-    (unless (equal (car sqlite3-mode--previous-row)
-                   (get-text-property (point) 'sqlite3-rowid))
+    (unless (eq sqlite3-mode--previous-row
+                (get-text-property (point) 'sqlite3-mode-row))
       (sqlite3-mode--apply-changes)
       (let ((msg (sqlite3-mode--get-error)))
         (when msg
@@ -515,7 +517,7 @@ If changed data violate database constraint, transaction will be rollback.
                                                 rowid) t)))
       (unless data
         ;;TODO
-        (error "Change primary key? Currently PRIMARY KEY changing is not supported"))
+        (error "Change PRIMARY KEY? Currently PRIMARY KEY changing is not supported"))
       (delete-region (line-beginning-position) (line-end-position))
       (sqlite3-mode--insert-row (cons rowid (car data))))))
 
@@ -535,8 +537,8 @@ If changed data violate database constraint, transaction will be rollback.
                   tmp))))
     (cond
      ((memq ov (overlays-at (point))))
-     ((get-text-property (point) 'sqlite3-source-value (current-buffer))
-      (let* ((region (sqlite3-text-property-region (point) 'sqlite3-source-value))
+     ((get-text-property (point) 'sqlite3-mode-cell (current-buffer))
+      (let* ((region (sqlite3-text-property-region (point) 'sqlite3-mode-cell))
              (start (car region))
              (end (cdr region)))
         (move-overlay ov start end)
@@ -560,11 +562,11 @@ If changed data violate database constraint, transaction will be rollback.
            (cons start end)))))
 
 (defun sqlite3-mode--previous-cell (point &optional current-line)
-  (let ((region (sqlite3-text-property-region point 'sqlite3-source-value)))
+  (let ((region (sqlite3-text-property-region point 'sqlite3-mode-cell)))
     (cond
      ((null region)
       (previous-single-property-change
-       point 'sqlite3-source-value nil
+       point 'sqlite3-mode-cell nil
        (if current-line (line-beginning-position) (point-min))))
      ((eq (car region) (point-min))
       (point-min))
@@ -572,10 +574,10 @@ If changed data violate database constraint, transaction will be rollback.
       (sqlite3-mode--previous-cell (1- (car region)) current-line)))))
 
 (defun sqlite3-mode--next-cell (point &optional current-line)
-  (let ((region (sqlite3-text-property-region point 'sqlite3-source-value)))
+  (let ((region (sqlite3-text-property-region point 'sqlite3-mode-cell)))
     (next-single-property-change 
      (or (cdr region) point) 
-     'sqlite3-source-value nil
+     'sqlite3-mode-cell nil
      (and current-line (line-end-position)))))
 
 (defun sqlite3-mode--data-to-text (datum)
@@ -613,21 +615,25 @@ If changed data violate database constraint, transaction will be rollback.
   "String used to separate tabs.")
 
 (defun sqlite3-mode--set-header (width-def headers)
-  (setq sqlite3-mode--header
+  (setq sqlite3-mode--columns
         (loop for max in (cdr width-def)
               for hdr in (cdr headers)
+              for idx from 0
               ;;TODO 30
-              collect (list hdr max (min max 30)))))
+              collect (list hdr
+                            :index idx 
+                            :initial-max max
+                            :width (min max 30)))))
 
-(defvar sqlite3-mode--header nil)
-(make-variable-buffer-local 'sqlite3-mode--header)
+(defvar sqlite3-mode--columns nil)
+(make-variable-buffer-local 'sqlite3-mode--columns)
 
 (defun sqlite3-mode--insert-empty-row ()
   (when sqlite3-mode--highlight-overlay
     (move-overlay sqlite3-mode--highlight-overlay
                   (point-max) (point-max)))
   (forward-line 0)
-  (let ((row (cons nil (make-list (length sqlite3-mode--header) "")))
+  (let ((row (cons nil (make-list (length sqlite3-mode--columns) nil)))
         (inhibit-read-only t))
     (insert "\n")
     (forward-line -1)
@@ -651,7 +657,7 @@ If changed data violate database constraint, transaction will be rollback.
                    'sqlite3-error-line-p t))
 
 (defun sqlite3-mode--apply-changes ()
-  (let ((row sqlite3-mode--previous-row)
+  (let ((row (sqlite3-mode--convert-row sqlite3-mode--previous-row))
         (not-found))
     (save-excursion 
       (setq not-found (null (sqlite3-mode--goto-rowid (car row))))
@@ -676,7 +682,8 @@ If changed data violate database constraint, transaction will be rollback.
   (let ((first (point)))
     (goto-char (point-min))
     (loop while (not (eobp))
-          if (equal rowid (get-text-property (point) 'sqlite3-rowid))
+          if (let ((row (get-text-property (point) 'sqlite3-mode-row)))
+               (equal rowid (plist-get (cdr row) :rowid)))
           return (point)
           do (forward-line 1)
           finally (goto-char first))))
@@ -686,18 +693,14 @@ If changed data violate database constraint, transaction will be rollback.
   "Face for highlighting failed part in Isearch echo-area message."
   :group 'sqlite3)
 
-(defun sqlite3-mode-current-row ()
-  (unless (eobp)
-    (save-excursion
-      (forward-line 0)
-      (cons 
-       (get-text-property (point) 'sqlite3-rowid)
-       (loop with p = (point)
-             for (name . rest) in sqlite3-mode--header
-             collect (list name
-                           (get-text-property p 'sqlite3-source-value)
-                           (get-text-property p 'sqlite3-edit-value))
-             do (setq p (sqlite3-mode--next-cell p t)))))))
+(defun sqlite3-mode--convert-row (row)
+  (cons 
+   (plist-get (cdr row) :rowid)
+   (loop for c in (plist-get (cdr row) :cells)
+         collect (list 
+                  (car (plist-get (cdr c) :column))
+                  (plist-get (cdr c) :source-value)
+                  (plist-get (cdr c) :edit-value)))))
 
 (defun sqlite3-mode--check-error-line ()
   (let ((errs (remove-if-not 
@@ -727,17 +730,18 @@ If changed data violate database constraint, transaction will be rollback.
             (loop with hscroll = (window-hscroll)
                   ;;  set t after first displaying column in window
                   with flag
-                  for (header max-width wid) in sqlite3-mode--header
-                  sum (1+ wid) into right
+                  for col in sqlite3-mode--columns
+                  sum (1+ (plist-get (cdr col) :width)) into right
                   if (<= hscroll right)
-                  collect (progn
+                  collect (let ((name (car col))
+                                (wid (plist-get (cdr col) :width)))
                             (unless flag
                               (setq wid (- right hscroll 1)))
                             (setq flag t)
                             (when (< wid 3)
                               ;; Beginning of line header may have too short length of name.
                               (setq header ""))
-                            (sqlite3-mode--truncate-text wid header))))
+                            (sqlite3-mode--truncate-text wid name))))
            (filler (make-string (frame-width) ?\s))
            (tail (sqlite3-header-background-propertize filler)))
       (setq header-line-format
@@ -752,34 +756,37 @@ If changed data violate database constraint, transaction will be rollback.
 
 (defun sqlite3-mode--insert-row (row)
   ;; (car row) is ROWID
-  (loop for v in (cdr row)
-        for i from 0
-        do (progn
-             (when (> i 0)
-               (insert " "))
-             (let ((region (sqlite3-mode--insert-cell v)))
-               (put-text-property (car region) (cdr region) 
-                                  'sqlite3-source-value v))))
-  (put-text-property
-   (line-beginning-position) (line-end-position)
-   'sqlite3-rowid (car row)))
+  (let ((rowobj `(nil :rowid ,(car row) :cells nil))
+        (cells nil))
+    (loop for v in (cdr row)
+          for i from 0
+          do (progn
+               (when (> i 0)
+                 (insert " "))
+               (let ((cell (sqlite3-mode--insert-cell v)))
+                 (setq cells (cons cell cells))
+                 (plist-put (cdr cell) :source-value v))))
+    (plist-put (cdr rowobj) :cells (nreverse cells))
+    (put-text-property
+     (line-beginning-position) (line-end-position)
+     'sqlite3-mode-row rowobj)))
 
 (defun sqlite3-mode--cell-width (width)
   ;; TODO defvar 30
   (min width 30))
 
-(defun sqlite3-mode--insert-cell (value)
+(defun sqlite3-mode--insert-cell (value &optional cell)
   (let* ((start (point))
          (col (sqlite3-mode--column-index))
-         (column (nth col sqlite3-mode--header))
-         (wid (nth 2 (nth col sqlite3-mode--header)))
+         (column (nth col sqlite3-mode--columns))
+         (wid (plist-get (cdr column) :width))
          (truncated (sqlite3-mode--truncate-insert (or value "") wid))
-         (cell `(nil :edit-value nil :truncated ,truncated
-                     :column ,column)))
+         (cell (or cell 
+                   `(nil :edit-value nil :truncated ,truncated
+                         :column ,column))))
     (let ((end (point)))
       (put-text-property start end 'sqlite3-mode-cell cell)
-      (put-text-property start end 'sqlite3-mode-truncated truncated)
-      (cons start end))))
+      cell)))
 
 (defun sqlite3-mode--truncate-insert (value width)
   (let* ((pos-beg (point))
@@ -819,21 +826,19 @@ If changed data violate database constraint, transaction will be rollback.
 
 (defun sqlite3-mode--replace-current-cell (value)
   (let* ((pos (point))                  ;save position
-         (region (sqlite3-text-property-region pos 'sqlite3-source-value)))
+         (region (sqlite3-text-property-region pos 'sqlite3-mode-cell)))
     (unless region
       (error "Not a cell"))
-    (let ((source (get-text-property pos 'sqlite3-source-value))
-          (rowid (get-text-property (point) 'sqlite3-rowid))
+    (let ((cell (get-text-property pos 'sqlite3-mode-cell))
+          (row (get-text-property pos 'sqlite3-mode-row))
+          ;; save rest of line with properties
           (rest (buffer-substring (cdr region) (line-end-position))))
       (delete-region (car region) (line-end-position))
-      (let ((new (sqlite3-mode--insert-cell value)))
-        (put-text-property (line-beginning-position) (line-end-position) 'sqlite3-rowid
-                           rowid)
-        (put-text-property (car region) (cdr region) 'sqlite3-edit-value
-                           value)
-        ;; restore source value if exist
-        (put-text-property (car new) (cdr new) 'sqlite3-source-value source)
-        (insert rest)))
+      (sqlite3-mode--insert-cell value cell)
+      (plist-put (cdr cell) :edit-value value)
+      (put-text-property (line-beginning-position) (line-end-position) 
+                         'sqlite3-mode-row row)
+      (insert rest))
     ;; restore previous position
     (goto-char pos)))
 
