@@ -36,7 +36,7 @@
 
 ;;; TODO:
 ;; * incremental search all data in table
-;; * incremental search invisible cell.
+;; * incremental search invisible text in cell.
 ;; * number to right.
 ;; * blob
 ;; * check sqlite3 command is exists.
@@ -164,7 +164,8 @@
   (when (plusp (recursion-depth))
     (error "%s"
            (substitute-command-keys
-            "Other recursive edit. Type \\[abort-recursive-edit] to quit recursive edit")))
+            (concat "Other recursive edit. "
+                    "Type \\[abort-recursive-edit] to quit recursive edit"))))
   (let ((value (sqlite3-mode-current-value)))
     (unless value
       (error "No cell is here"))
@@ -189,6 +190,7 @@ If changed data violate database constraint, transaction will be rollback.
   (interactive)
   (unless (eq (sqlite3-mode-stream-status) 'transaction)
     (error "No commit are here"))
+  ;;TODO current line.
   (when (y-or-n-p "Commit all changes? ")
     (condition-case err
         (sqlite3-mode--transaction-commit)
@@ -208,7 +210,8 @@ If changed data violate database constraint, transaction will be rollback.
   (sqlite3-mode-redraw-page))
 
 (defun sqlite3-mode-reset ()
-  "Cause of unknown problem of editing buffer, reset sqlite3 command stream if you want."
+  "Cause of unknown problem of editing buffer, reset sqlite3 command stream 
+if you want."
   (interactive)
   (when (y-or-n-p "Restart sqlite3 process with discarding changes? ")
     (when sqlite3-mode--stream
@@ -339,7 +342,7 @@ If changed data violate database constraint, transaction will be rollback.
                ;; suppress tooltip if last command were C-g
                (not (eq last-command 'keyboard-quit)))
       (let ((cell (get-text-property (point) 'sqlite3-mode-cell)))
-        (when (plist-get cell :truncated)
+        (when (plist-get (cdr cell) :truncated)
           ;;TODO current-value
           (sqlite3-tooltip-show (sqlite3-mode-current-value)))))))
 
@@ -614,20 +617,6 @@ If changed data violate database constraint, transaction will be rollback.
                 '(space :width 1)))
   "String used to separate tabs.")
 
-(defun sqlite3-mode--set-header (width-def headers)
-  (setq sqlite3-mode--columns
-        (loop for max in (cdr width-def)
-              for hdr in (cdr headers)
-              for idx from 0
-              ;;TODO 30
-              collect (list hdr
-                            :index idx
-                            :initial-max max
-                            :width (min max 30)))))
-
-(defvar sqlite3-mode--columns nil)
-(make-variable-buffer-local 'sqlite3-mode--columns)
-
 (defun sqlite3-mode--insert-empty-row ()
   (when sqlite3-mode--highlight-overlay
     (move-overlay sqlite3-mode--highlight-overlay
@@ -724,7 +713,8 @@ If changed data violate database constraint, transaction will be rollback.
   (run-with-timer 0.1 nil 'sqlite3-mode--draw-header))
 
 (defun sqlite3-mode--draw-header ()
-  (unless (eq sqlite3-mode--previous-hscroll (window-hscroll))
+  (unless (and sqlite3-mode--previous-hscroll
+               (eq sqlite3-mode--previous-hscroll (window-hscroll)))
     (setq sqlite3-mode--previous-hscroll (window-hscroll))
     (let* ((disp-headers
             (loop with hscroll = (window-hscroll)
@@ -752,7 +742,8 @@ If changed data violate database constraint, transaction will be rollback.
                    'identity
                    disp-headers
                    sqlite3-header-column-separator)
-                  tail))))))
+                  tail)))
+      (force-mode-line-update))))
 
 (defun sqlite3-mode--insert-row (row)
   ;; (car row) is ROWID
@@ -770,10 +761,6 @@ If changed data violate database constraint, transaction will be rollback.
     (put-text-property
      (line-beginning-position) (line-end-position)
      'sqlite3-mode-row rowobj)))
-
-(defun sqlite3-mode--cell-width (width)
-  ;; TODO defvar 30
-  (min width 30))
 
 (defun sqlite3-mode--insert-cell (value &optional cell)
   (let* ((start (point))
@@ -812,17 +799,14 @@ If changed data violate database constraint, transaction will be rollback.
           truncated)))))
 
 (defun sqlite3-mode--column-index ()
-  (save-excursion
-    (let ((pos (point)))
-      (forward-line 0)
-      (loop with prev
-            for i from 0
-            if (eolp)
-            return i
-            do (let ((next (sqlite3-mode--next-cell (point) t)))
-                 (when next (goto-char next)))
-            if (< pos (point))
-            return i))))
+  (let* ((curr (get-text-property (point) 'sqlite3-mode-cell))
+         (prev (sqlite3-mode--previous-cell (point) t))
+         (cell (get-text-property (max (1- prev) (point-min)) 'sqlite3-mode-cell))
+         (column (plist-get (cdr cell) :column))
+         (index (plist-get (cdr column) :index)))
+    (if (eq curr cell)
+        0
+      (1+ index))))
 
 (defun sqlite3-mode--replace-current-cell (value)
   (let* ((pos (point))                  ;save position
@@ -930,6 +914,17 @@ If changed data violate database constraint, transaction will be rollback.
         (sqlite3-mode--delayed-draw-header t))
        (t nil)))))
 
+(defun sqlite3-mode--set-header (width-def headers)
+  (setq sqlite3-mode--columns
+        (loop for max in (cdr width-def)
+              for hdr in (cdr headers)
+              for idx from 0
+              ;;TODO 30
+              collect (list hdr
+                            :index idx
+                            :initial-max max
+                            :width (min max 30)))))
+
 (defun sqlite3-mode--calculate-max-width (data)
   ;; decide list length by header line
   (loop with all-width = (make-list (length (car data)) 3)
@@ -960,6 +955,9 @@ If changed data violate database constraint, transaction will be rollback.
 (make-variable-buffer-local 'sqlite3-mode--context)
 
 ;;TODO this local variable to one context variable?
+
+(defvar sqlite3-mode--columns nil)
+(make-variable-buffer-local 'sqlite3-mode--columns)
 
 (defvar sqlite3-mode--current-order nil)
 (make-variable-buffer-local 'sqlite3-mode--current-order)
