@@ -41,7 +41,6 @@
 ;; * blob
 ;; * check sqlite3 command is exists.
 ;; * windows
-;; * resize column
 ;; * when table have `ROWID' column.
 
 ;;; Code:
@@ -69,6 +68,8 @@
 
     (define-key map "\C-c\C-c" 'sqlite3-mode-toggle-display)
     (define-key map "\C-c\C-d" 'sqlite3-mode-delete-row)
+    (define-key map "\C-c\C-k" 'sqlite3-mode-shrink-column)
+    (define-key map "\C-c\C-l" 'sqlite3-mode-widen-column)
     (define-key map "\C-c\C-q" 'sqlite3-mode-send-query)
     (define-key map "\C-x\C-s" 'sqlite3-mode-commit-changes)
     (define-key map "\C-c\C-j" 'sqlite3-mode-jump-to-page)
@@ -109,8 +110,10 @@
   (set (make-local-variable 'backup-inhibited) t)
   (setq revert-buffer-function
         'sqlite3-mode-revert-buffer)
-  (setq sqlite3-mode--current-page 0)
-  (setq sqlite3-mode--current-table nil)
+  (setq sqlite3-mode--context
+        `(:table nil :schema nil 
+                 :order nil :cond nil 
+                 :page 0 :page-row ,sqlite3-mode--maximum))
   ;; disable creating #hoge.sqlite# file
   (auto-save-mode -1)
   (add-hook 'kill-emacs-hook 'sqlite3-killing-emacs)
@@ -150,13 +153,14 @@
       (sqlite3-mode--transaction-begin))
     (sqlite3-mode--update-with-handler
      (let* ((row (get-text-property (point) 'sqlite3-mode-row))
-            (rowid (plist-get (cdr row) :rowid))
+            (rowid (plist-get row :rowid))
             (query (sqlite3-mode--delete-query rowid)))
        (message "Deleting...")
-       (sqlite3-mode-read-data query)   ; no read wait until prompt.
-       (let ((inhibit-read-only t))
-         (delete-region (line-beginning-position)
-                        (line-beginning-position 2)))))))
+       ;; no read wait until prompt.
+       (sqlite3-mode-read-data query)))
+    (let ((inhibit-read-only t))
+      (delete-region (line-beginning-position)
+                     (line-beginning-position 2)))))
 
 (defun sqlite3-mode-start-edit ()
   "Edit current cell with opening subwindow."
@@ -199,6 +203,16 @@ If changed data violate database constraint, transaction will be rollback.
     ;; sync with physical data.
     (sqlite3-mode-redraw-page)))
 
+(defun sqlite3-mode-shrink-column (&optional arg)
+  "Shrink current column"
+  (interactive "p")
+  (sqlite3-mode-resize-column (* -1 arg)))
+
+(defun sqlite3-mode-widen-column (&optional arg)
+  "Widen current column"
+  (interactive "p")
+  (sqlite3-mode-resize-column arg))
+
 (defun sqlite3-mode-rollback ()
   "Discard all changes."
   (interactive)
@@ -236,7 +250,7 @@ if you want."
   (interactive
    (list (read-number "Page: ")))
   (unless (sqlite3-mode-draw-page
-           sqlite3-mode--current-table page)
+           (sqlite3-mode-get :table) page)
     (error "No such page")))
 
 (defun sqlite3-mode-forward-page (&optional arg)
@@ -245,8 +259,8 @@ if you want."
   (unless (sqlite3-mode--check-error-line)
     (signal 'quit nil))
   (unless (sqlite3-mode-draw-page
-           sqlite3-mode--current-table
-           (+ sqlite3-mode--current-page arg))
+           (sqlite3-mode-get :table)
+           (+ (sqlite3-mode-get :page) arg))
     (error "No more next page")))
 
 (defun sqlite3-mode-backward-page (&optional arg)
@@ -254,11 +268,11 @@ if you want."
   (interactive "p")
   (unless (sqlite3-mode--check-error-line)
     (signal 'quit nil))
-  (when (= sqlite3-mode--current-page 0)
+  (when (= (sqlite3-mode-get :page) 0)
     (error "This is a first page"))
   (unless (sqlite3-mode-draw-page
-           sqlite3-mode--current-table
-           (- sqlite3-mode--current-page arg))
+           (sqlite3-mode-get :table)
+           (- (sqlite3-mode-get :page) arg))
     (error "No more previous page")))
 
 (defun sqlite3-mode-next-row (&optional arg)
@@ -313,6 +327,24 @@ if you want."
 ;;; `sqlite3-mode' functions
 ;;;
 
+(defconst sqlite3-mode--cell-min-width 3)
+
+(defun sqlite3-mode-resize-column (arg)
+  (let* ((col (sqlite3-mode--column-index))
+         (column (nth col sqlite3-mode--columns))
+         (size (+ (plist-get column :width) arg)))
+    (plist-put column :width (max size sqlite3-mode--cell-min-width))
+    (save-excursion
+      (let ((inhibit-read-only t))
+        (goto-char (point-min))
+        (while (not (eobp))
+          (loop repeat col 
+                do (sqlite3-mode-next-column))
+          (sqlite3-mode--replace-current-cell
+           (sqlite3-mode-current-value))
+          (forward-line 1))))
+    (setq sqlite3-mode--previous-hscroll nil)))
+
 (defun sqlite3-mode--sync-modtime ()
   (set-visited-file-modtime
    (nth 5 (file-attributes buffer-file-name))))
@@ -332,8 +364,8 @@ if you want."
 (defun sqlite3-mode-current-value ()
   (let ((cell (get-text-property (point) 'sqlite3-mode-cell)))
     (or
-     (plist-get (cdr cell) :edit-value)
-     (plist-get (cdr cell) :source-value))))
+     (plist-get cell :edit-value)
+     (plist-get cell :source-value))))
 
 (defun sqlite3-mode-popup-contents ()
   (save-match-data
@@ -342,21 +374,21 @@ if you want."
                ;; suppress tooltip if last command were C-g
                (not (eq last-command 'keyboard-quit)))
       (let ((cell (get-text-property (point) 'sqlite3-mode-cell)))
-        (when (plist-get (cdr cell) :truncated)
+        (when (plist-get cell :truncated)
           ;;TODO current-value
           (sqlite3-tooltip-show (sqlite3-mode-current-value)))))))
 
 (defconst sqlite3-mode-line-format
   '(
-    (sqlite3-mode--current-table
-     (:eval
-      (concat " ["
-              (propertize
-               (format "%s:%d"
-                       sqlite3-mode--current-table
-                       (1+ sqlite3-mode--current-page))
-               'face 'mode-line-emphasis)
-              "]")))
+    (:eval
+     (when (sqlite3-mode-get :table)
+         (concat " ["
+                 (propertize
+                  (format "%s:%d"
+                          (sqlite3-mode-get :table)
+                          (1+ (sqlite3-mode-get :page)))
+                  'face 'mode-line-emphasis)
+                 "]")))
     (:eval
      (concat
       " "
@@ -392,11 +424,14 @@ if you want."
     (pop-to-buffer buf)
     (message "%s"
              (substitute-command-keys
-              "Type \\[exit-recursive-edit] to finish the edit."))
-    (recursive-edit)
-    (let ((new-value (buffer-string)))
-      (set-window-configuration config)
-      new-value)))
+              (concat "Type \\[exit-recursive-edit] to finish the edit."
+                      "Type \\[abort-recursive-edit] to cancel the edit.")))
+    (unwind-protect
+        (progn
+          (recursive-edit)
+          (let ((new-value (buffer-string)))
+            new-value))
+      (set-window-configuration config))))
 
 (defun sqlite3-tooltip-show (text)
   ;; show tooltip at cursor point.
@@ -515,9 +550,9 @@ if you want."
 (defun sqlite3-mode--sync-row (rowid)
   ;;TODO rowid will be changed if changing primary key value..
   (let ((inhibit-read-only t))
-    (let ((data (sqlite3-mode-read-data (format "SELECT * FROM %s WHERE ROWID = %s"
-                                                sqlite3-mode--current-table
-                                                rowid) t)))
+    (let ((data (sqlite3-mode-read-data 
+                 (format "SELECT * FROM %s WHERE ROWID = %s"
+                         (sqlite3-mode-get :table) rowid) t)))
       (unless data
         ;;TODO
         (error "Change PRIMARY KEY? Currently PRIMARY KEY changing is not supported"))
@@ -672,7 +707,7 @@ if you want."
     (goto-char (point-min))
     (loop while (not (eobp))
           if (let ((row (get-text-property (point) 'sqlite3-mode-row)))
-               (equal rowid (plist-get (cdr row) :rowid)))
+               (equal rowid (plist-get row :rowid)))
           return (point)
           do (forward-line 1)
           finally (goto-char first))))
@@ -686,10 +721,11 @@ if you want."
   (cons
    (plist-get (cdr row) :rowid)
    (loop for c in (plist-get (cdr row) :cells)
-         collect (list
-                  (car (plist-get (cdr c) :column))
-                  (plist-get (cdr c) :source-value)
-                  (plist-get (cdr c) :edit-value)))))
+         collect (let ((col (plist-get c :column)))
+                   (list
+                    (plist-get col :name)
+                    (plist-get c :source-value)
+                    (plist-get c :edit-value))))))
 
 (defun sqlite3-mode--check-error-line ()
   (let ((errs (remove-if-not
@@ -715,20 +751,19 @@ if you want."
 (defun sqlite3-mode--draw-header ()
   (unless (and sqlite3-mode--previous-hscroll
                (eq sqlite3-mode--previous-hscroll (window-hscroll)))
-    (setq sqlite3-mode--previous-hscroll (window-hscroll))
     (let* ((disp-headers
             (loop with hscroll = (window-hscroll)
                   ;;  set t after first displaying column in window
                   with flag
                   for col in sqlite3-mode--columns
-                  sum (1+ (plist-get (cdr col) :width)) into right
+                  sum (1+ (plist-get col :width)) into right
                   if (<= hscroll right)
-                  collect (let ((name (car col))
-                                (wid (plist-get (cdr col) :width)))
+                  collect (let ((name (plist-get col :name))
+                                (wid (plist-get col :width)))
                             (unless flag
                               (setq wid (- right hscroll 1)))
                             (setq flag t)
-                            (when (< wid 3)
+                            (when (< wid sqlite3-mode--cell-min-width)
                               ;; Beginning of line header may have too short length of name.
                               (setq header ""))
                             (sqlite3-mode--truncate-text wid name))))
@@ -743,34 +778,34 @@ if you want."
                    disp-headers
                    sqlite3-header-column-separator)
                   tail)))
+      (setq sqlite3-mode--previous-hscroll (window-hscroll))
       (force-mode-line-update))))
 
 (defun sqlite3-mode--insert-row (row)
   ;; (car row) is ROWID
-  (let ((rowobj `(nil :rowid ,(car row) :cells nil))
+  (let ((rowobj `(:rowid ,(car row) :cells nil))
         (cells nil))
     (loop for v in (cdr row)
           for i from 0
           do (progn
                (when (> i 0)
                  (insert " "))
-               (let ((cell (sqlite3-mode--insert-cell v)))
+               (let ((cell (sqlite3-mode--insert-cell v i nil)))
                  (setq cells (cons cell cells))
-                 (plist-put (cdr cell) :source-value v))))
+                 (plist-put cell :source-value v))))
     (plist-put (cdr rowobj) :cells (nreverse cells))
     (put-text-property
      (line-beginning-position) (line-end-position)
      'sqlite3-mode-row rowobj)))
 
-(defun sqlite3-mode--insert-cell (value &optional cell)
+(defun sqlite3-mode--insert-cell (value index &optional cell)
   (let* ((start (point))
-         (col (sqlite3-mode--column-index))
-         (column (nth col sqlite3-mode--columns))
-         (wid (plist-get (cdr column) :width))
+         (column (nth index sqlite3-mode--columns))
+         (wid (plist-get column :width))
          (truncated (sqlite3-mode--truncate-insert (or value "") wid))
          (cell (or cell
-                   `(nil :edit-value nil :truncated ,truncated
-                         :column ,column))))
+                   `(:edit-value nil :truncated ,truncated
+                                 :column ,column))))
     (let ((end (point)))
       (put-text-property start end 'sqlite3-mode-cell cell)
       cell)))
@@ -790,7 +825,8 @@ if you want."
                (truncated
                 (cond
                  ((> end (point))
-                  (let ((start (max pos-beg (- (point) 3))))
+                  (let ((start (max pos-beg 
+                                    (- (point) sqlite3-mode--cell-min-width))))
                     (delete-region start end))
                   (insert (make-string (- next-column (current-column)) ?\.))
                   t)
@@ -801,9 +837,11 @@ if you want."
 (defun sqlite3-mode--column-index ()
   (let* ((curr (get-text-property (point) 'sqlite3-mode-cell))
          (prev (sqlite3-mode--previous-cell (point) t))
-         (cell (get-text-property (max (1- prev) (point-min)) 'sqlite3-mode-cell))
-         (column (plist-get (cdr cell) :column))
-         (index (plist-get (cdr column) :index)))
+         (cell (get-text-property
+                (max prev (line-beginning-position))
+                'sqlite3-mode-cell))
+         (column (plist-get cell :column))
+         (index (plist-get column :index)))
     (if (eq curr cell)
         0
       (1+ index))))
@@ -813,13 +851,15 @@ if you want."
          (region (sqlite3-text-property-region pos 'sqlite3-mode-cell)))
     (unless region
       (error "Not a cell"))
-    (let ((cell (get-text-property pos 'sqlite3-mode-cell))
-          (row (get-text-property pos 'sqlite3-mode-row))
-          ;; save rest of line with properties
-          (rest (buffer-substring (cdr region) (line-end-position))))
+    (let* ((cell (get-text-property pos 'sqlite3-mode-cell))
+           (column (plist-get cell :column))
+           (index (plist-get column :index))
+           (row (get-text-property pos 'sqlite3-mode-row))
+           ;; save rest of line with properties
+           (rest (buffer-substring (cdr region) (line-end-position))))
       (delete-region (car region) (line-end-position))
-      (sqlite3-mode--insert-cell value cell)
-      (plist-put (cdr cell) :edit-value value)
+      (sqlite3-mode--insert-cell value index cell)
+      (plist-put cell :edit-value value)
       (put-text-property (line-beginning-position) (line-end-position)
                          'sqlite3-mode-row row)
       (insert rest))
@@ -831,8 +871,10 @@ if you want."
   (interactive
    (let ((table (sqlite3-mode--read-table)))
      (list table)))
-  (unless (sqlite3-mode-draw-page table 0)
-    (error "No data")))
+  (sqlite3-mode--check-stream)
+  (let ((info (sqlite3-stream--table-schema sqlite3-mode--stream table)))
+    (unless (sqlite3-mode-draw-page table 0)
+      (error "No data"))))
 
 (defvar sqlite3-mode-read-table-history nil)
 (defun sqlite3-mode--read-table ()
@@ -862,12 +904,12 @@ if you want."
       data)))
 
 (defun sqlite3-mode-redraw-page ()
-  (when sqlite3-mode--current-table
+  (when (sqlite3-mode-get :table)
     (let ((start (window-start))
           (pos (point)))
       (sqlite3-mode-draw-page
-       sqlite3-mode--current-table
-       sqlite3-mode--current-page)
+       (sqlite3-mode-get :table)
+       (sqlite3-mode-get :page))
       (goto-char pos)
       (set-window-start (selected-window) start))))
 
@@ -877,9 +919,12 @@ if you want."
   ;; between reading from disk and beginning of transaction.
   (sqlite3-mode--sync-modtime)
   (save-excursion
-    (let* ((where (or sqlite3-mode--current-cond "1 = 1"))
-           (order "") ;; TODO order by
-           (order-by "")                ;TODO
+    (let* ((where (or (sqlite3-mode-get :cond) "1 = 1"))
+           ;; TODO order by
+           (order (sqlite3-mode-get :order))
+           ;; TODO
+           (order-by (or (and order (format "ORDER BY %s" order)) ""))
+           (row (or (sqlite3-mode-get :page-row) 100))
            (query (format
                    (concat "SELECT ROWID, *"
                            " FROM %s"
@@ -887,20 +932,20 @@ if you want."
                            " LIMIT %s OFFSET %s * %s"
                            "%s")
                    table where
-                   sqlite3-mode--maximum
-                   sqlite3-mode--maximum
+                   row row
                    page order-by))
            (data (sqlite3-mode-read-data query)))
       (cond
        ((or data
-            (not (equal sqlite3-mode--current-table table)))
-        (setq sqlite3-mode--current-table table)
-        (let ((inhibit-read-only t)
-              (width-def (sqlite3-mode--calculate-max-width data)))
+            (not (equal (sqlite3-mode-get :table) table)))
+        (let ((schema (sqlite3-stream--table-schema sqlite3-mode--stream table)))
+          (sqlite3-mode-put :schema schema))
+        (sqlite3-mode-put :table table)
+        (sqlite3-mode-put :page page)
+        (let ((inhibit-read-only t))
           (erase-buffer)
           (remove-overlays (point-min) (point-max))
-          ;;TODO merge to calculate max-width function
-          (sqlite3-mode--set-header width-def (car data))
+          (sqlite3-mode--set-header data)
           (mapc
            (lambda (row)
              (sqlite3-mode--insert-row row)
@@ -909,25 +954,27 @@ if you want."
            (cdr data))
           (set-buffer-modified-p nil))
         (setq buffer-read-only t)
-        (setq sqlite3-mode--current-page page)
         ;; redraw header forcibly
         (sqlite3-mode--delayed-draw-header t))
        (t nil)))))
 
-(defun sqlite3-mode--set-header (width-def headers)
-  (setq sqlite3-mode--columns
-        (loop for max in (cdr width-def)
-              for hdr in (cdr headers)
-              for idx from 0
-              ;;TODO 30
-              collect (list hdr
-                            :index idx
-                            :initial-max max
-                            :width (min max 30)))))
+(defun sqlite3-mode--set-header (data)
+  (let ((width-def (sqlite3-mode--calculate-max-width data))
+        (headers (car data)))
+    (setq sqlite3-mode--columns
+          (loop for max in (cdr width-def)
+                for hdr in (cdr headers)
+                for idx from 0
+                ;;TODO 30
+                collect (list :name hdr
+                              :index idx
+                              :initial-max max
+                              :width (min max 30))))))
 
 (defun sqlite3-mode--calculate-max-width (data)
   ;; decide list length by header line
-  (loop with all-width = (make-list (length (car data)) 3)
+  (loop with all-width = (make-list (length (car data)) 
+                                    sqlite3-mode--cell-min-width)
         for row in data
         do (loop for datum in row
                  for pair on all-width
@@ -954,22 +1001,15 @@ if you want."
 (defvar sqlite3-mode--context nil)
 (make-variable-buffer-local 'sqlite3-mode--context)
 
-;;TODO this local variable to one context variable?
+(defun sqlite3-mode-get (key)
+  (plist-get sqlite3-mode--context key))
 
+(defun sqlite3-mode-put (key value)
+  (plist-put sqlite3-mode--context key value))
+
+;;TODO to *-context
 (defvar sqlite3-mode--columns nil)
 (make-variable-buffer-local 'sqlite3-mode--columns)
-
-(defvar sqlite3-mode--current-order nil)
-(make-variable-buffer-local 'sqlite3-mode--current-order)
-
-(defvar sqlite3-mode--current-cond nil)
-(make-variable-buffer-local 'sqlite3-mode--current-cond)
-
-(defvar sqlite3-mode--current-table nil)
-(make-variable-buffer-local 'sqlite3-mode--current-table)
-
-(defvar sqlite3-mode--current-page nil)
-(make-variable-buffer-local 'sqlite3-mode--current-page)
 
 (defvar sqlite3-mode--maximum 100)
 
@@ -989,7 +1029,7 @@ if you want."
 
 (defun sqlite3-mode--update-query (row)
   (format "UPDATE %s SET %s WHERE ROWID = %s;"
-          sqlite3-mode--current-table
+          (sqlite3-mode-get :table)
           (mapconcat
            (lambda (x)
              (format "%s = %s"
@@ -1007,7 +1047,7 @@ if you want."
           do (setq columns (cons name columns)
                    values (cons (or edit "") values)))
     (format "INSERT INTO %s (%s) VALUES (%s);"
-            sqlite3-mode--current-table
+            (sqlite3-mode-get :table)
             (mapconcat 'identity columns ", ")
             (mapconcat
              (lambda (x) (sqlite3-to-escaped-string x))
@@ -1015,8 +1055,7 @@ if you want."
 
 (defun sqlite3-mode--delete-query (rowid)
   (format "DELETE FROM %s WHERE ROWID = %s;"
-          sqlite3-mode--current-table
-          rowid))
+          (sqlite3-mode-get :table) rowid))
 
 ;;TODO order by
 ;; TODO threshold of getting.
@@ -1169,6 +1208,16 @@ Good: SELECT * FROM table1\n
     (redisplay)
     (sleep-for seconds)))
 
+(defun sqlite3-plist-clone (plist)
+  (copy-seq plist))
+
+(defun sqlite3-plist-merge (src dest)
+  (loop for props on src by 'cddr
+        do (let ((name (car props))
+                 (val (cadr props)))
+             (plist-put dest name val)))
+  dest)
+
 ;;;
 ;;; Utilities to handle any sqlite3 item.
 ;;;
@@ -1270,7 +1319,7 @@ Good: SELECT * FROM table1\n
    (sqlite3-stream--read-result
     stream sqlite3-select-table-query)))
 
-(defun sqlite3-stream--table-info (stream table)
+(defun sqlite3-stream--table-schema (stream table)
   "Get TABLE information in FILE.
 Elements of the item list are:
 0. cid
@@ -1283,8 +1332,8 @@ Elements of the item list are:
    (lambda (row)
      (list
       (string-to-number (nth 0 row))
-      (nth 1 row)
-      (nth 2 row)
+      (downcase (nth 1 row))
+      (upcase (nth 2 row))
       (equal (nth 3 row) "1")
       (nth 4 row)
       (equal (nth 5 row) "1")))
@@ -1316,12 +1365,12 @@ Elements of the item list are:
 (defun sqlite3-db-table-columns (file table)
   (mapcar
    (lambda (r) (nth 1 r))
-   (sqlite3-db-table-info file table)))
+   (sqlite3-db-table-schema file table)))
 
-(defun sqlite3-db-table-info (file table)
-  "See `sqlite3-stream--table-info'"
+(defun sqlite3-db-table-schema (file table)
+  "See `sqlite3-stream--table-schema'"
   (sqlite3-with-db-stream file stream
-    (sqlite3-stream--table-info stream table)))
+    (sqlite3-stream--table-schema stream table)))
 
 ;;TODO other file
 (require 'ert)
@@ -1333,7 +1382,7 @@ Elements of the item list are:
     (unwind-protect
         (progn
           (should (sqlite3-stream--send-query stream "CREATE TABLE hoge (id INTEGER PRIMARY KEY, text TEXT)"))
-          (should (equal (sqlite3-db-table-info db "hoge")
+          (should (equal (sqlite3-db-table-schema db "hoge")
                          '((0 "id" "INTEGER" nil "" t) (1 "text" "TEXT" nil "" nil))))
           (should (sqlite3-stream--send-query stream "INSERT INTO hoge VALUES (1, 'a')"))
           (should (sqlite3-stream--send-query stream "INSERT INTO hoge VALUES (2, 'b')"))
