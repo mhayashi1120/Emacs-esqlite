@@ -111,9 +111,7 @@
   (setq revert-buffer-function
         'sqlite3-mode-revert-buffer)
   (setq sqlite3-mode--context
-        `(:table nil :schema nil 
-                 :order nil :cond nil 
-                 :page 0 :page-row ,sqlite3-mode--maximum))
+        (sqlite3-mode--create-context))
   ;; disable creating #hoge.sqlite# file
   (auto-save-mode -1)
   (add-hook 'kill-emacs-hook 'sqlite3-killing-emacs)
@@ -250,7 +248,7 @@ if you want."
   (interactive
    (list (read-number "Page: ")))
   (unless (sqlite3-mode-draw-page
-           (sqlite3-mode-get :table) page)
+           (sqlite3-mode-get :table) (1- page))
     (error "No such page")))
 
 (defun sqlite3-mode-forward-page (&optional arg)
@@ -384,9 +382,10 @@ if you want."
      (when (sqlite3-mode-get :table)
          (concat " ["
                  (propertize
-                  (format "%s:%d"
+                  (format "%s:%d/%s"
                           (sqlite3-mode-get :table)
-                          (1+ (sqlite3-mode-get :page)))
+                          (1+ (sqlite3-mode-get :page))
+                          (or (sqlite3-mode-get :max-page) "Unknown"))
                   'face 'mode-line-emphasis)
                  "]")))
     (:eval
@@ -555,7 +554,7 @@ if you want."
                          (sqlite3-mode-get :table) rowid) t)))
       (unless data
         ;;TODO
-        (error "Change PRIMARY KEY? Currently PRIMARY KEY changing is not supported"))
+        (error "Change PRIMARY KEY? Currently PRIMARY KEY changing is not supported yet"))
       (delete-region (line-beginning-position) (line-end-position))
       (sqlite3-mode--insert-row (cons rowid (car data))))))
 
@@ -913,6 +912,17 @@ if you want."
       (goto-char pos)
       (set-window-start (selected-window) start))))
 
+(defun sqlite3-mode-max-page ()
+  (let* ((query (format
+                 "SELECT ROUND((COUNT(*) / %s) + 0.5) FROM %s WHERE %s"
+                 (sqlite3-mode-get :page-row)
+                 (sqlite3-mode-get :table)
+                 (or (sqlite3-mode-get :where) "1 = 1")))
+         (data (sqlite3-mode-read-data query t))
+         (max (caar data)))
+    (and (string-match "^\\([0-9]+\\)" max)
+         (match-string 1 max))))
+
 (defun sqlite3-mode-draw-page (table page)
   ;; sync mtime with disk file.
   ;; to detect database modifying
@@ -935,6 +945,7 @@ if you want."
                    row row
                    page order-by))
            (data (sqlite3-mode-read-data query)))
+      (sqlite3-mode-put :max-page nil)
       (cond
        ((or data
             (not (equal (sqlite3-mode-get :table) table)))
@@ -942,6 +953,7 @@ if you want."
           (sqlite3-mode-put :schema schema))
         (sqlite3-mode-put :table table)
         (sqlite3-mode-put :page page)
+        (sqlite3-mode-put :max-page (sqlite3-mode-max-page))
         (let ((inhibit-read-only t))
           (erase-buffer)
           (remove-overlays (point-min) (point-max))
@@ -1000,6 +1012,11 @@ if you want."
 
 (defvar sqlite3-mode--context nil)
 (make-variable-buffer-local 'sqlite3-mode--context)
+
+(defun sqlite3-mode--create-context ()
+  `(:table nil :schema nil 
+           :order nil :cond nil 
+           :page 0 :page-row ,sqlite3-mode--maximum))
 
 (defun sqlite3-mode-get (key)
   (plist-get sqlite3-mode--context key))
@@ -1085,6 +1102,7 @@ if you want."
          (proc (start-process "Sqlite3 Stream" buf
                               sqlite3-program
                               "-header"
+                              "-interactive"
                               "-init" (sqlite3--init-file)
                               "-csv" file)))
     (process-put proc 'sqlite3-stream-process-p t)
