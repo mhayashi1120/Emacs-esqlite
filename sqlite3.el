@@ -40,8 +40,12 @@
 ;; * number to right.
 ;; * blob
 ;; * check sqlite3 command is exists.
-;; * windows
+;; * windows (cygwin)
 ;; * when table have `ROWID' column.
+;; * null value
+;; * create hook (ex: commit, update delete...)
+;; * changing primary key with
+;; * no result then no columns...
 
 ;;; Code:
 
@@ -191,8 +195,10 @@ If changed data violate database constraint, transaction will be rollback.
 "
   (interactive)
   (unless (eq (sqlite3-mode-stream-status) 'transaction)
-    (error "No commit are here"))
-  ;;TODO current line.
+    (error "Commit has not been started"))
+  ;;TODO
+  (sqlite3-mode--apply-changes)
+  (sqlite3-mode--check-error-line)
   (when (y-or-n-p "Commit all changes? ")
     (condition-case err
         (sqlite3-mode--transaction-commit)
@@ -241,7 +247,9 @@ if you want."
 ;;TODO
 (defun sqlite3-mode-send-query (query)
   (interactive "sSQL: ")
-  (sqlite3-mode--send-query query))
+  (sqlite3-mode--check-error-line)
+  (sqlite3-mode--send-query query)
+  (sqlite3-mode-redraw-page))
 
 (defun sqlite3-mode-jump-to-page (page)
   "Jump to selected PAGE"
@@ -252,20 +260,18 @@ if you want."
     (error "No such page")))
 
 (defun sqlite3-mode-forward-page (&optional arg)
-  "TODO"
+  "Forward page."
   (interactive "p")
-  (unless (sqlite3-mode--check-error-line)
-    (signal 'quit nil))
+  (sqlite3-mode--check-error-line)
   (unless (sqlite3-mode-draw-page
            (sqlite3-mode-get :table)
            (+ (sqlite3-mode-get :page) arg))
     (error "No more next page")))
 
 (defun sqlite3-mode-backward-page (&optional arg)
-  "TODO"
+  "Backward page."
   (interactive "p")
-  (unless (sqlite3-mode--check-error-line)
-    (signal 'quit nil))
+  (sqlite3-mode--check-error-line)
   (when (= (sqlite3-mode-get :page) 0)
     (error "This is a first page"))
   (unless (sqlite3-mode-draw-page
@@ -274,14 +280,14 @@ if you want."
     (error "No more previous page")))
 
 (defun sqlite3-mode-next-row (&optional arg)
-  "TODO"
+  "Goto next line of row."
   (interactive "p")
   (sqlite3-mode--move-line arg)
   ;;TODO next page
   )
 
 (defun sqlite3-mode-previous-row (&optional arg)
-  "TODO"
+  "Goto previous line of row."
   (interactive "p")
   (sqlite3-mode--move-line (- arg))
   ;;TODO prev page
@@ -367,13 +373,11 @@ if you want."
 
 (defun sqlite3-mode-popup-contents ()
   (save-match-data
-    ;;TODO only show current cell exceed window.
     (when (and (eq major-mode 'sqlite3-mode)
                ;; suppress tooltip if last command were C-g
                (not (eq last-command 'keyboard-quit)))
       (let ((cell (get-text-property (point) 'sqlite3-mode-cell)))
         (when (plist-get cell :truncated)
-          ;;TODO current-value
           (sqlite3-tooltip-show (sqlite3-mode-current-value)))))))
 
 (defconst sqlite3-mode-line-format
@@ -517,17 +521,17 @@ if you want."
     (error
      (message "%s" err))))
 
-(defvar sqlite3-mode--previous-row nil)
-(make-variable-buffer-local 'sqlite3-mode--previous-row)
+(defvar sqlite3-mode--processing-row nil)
+(make-variable-buffer-local 'sqlite3-mode--processing-row)
 
 (defun sqlite3-mode--pre-handle-rowid ()
-  (setq sqlite3-mode--previous-row
+  (setq sqlite3-mode--processing-row
         (get-text-property (point) 'sqlite3-mode-row)))
 
 (defun sqlite3-mode--post-change-row ()
-  (when sqlite3-mode--previous-row
+  (when sqlite3-mode--processing-row
     ;;TODO row have error that must have insert.
-    (unless (eq sqlite3-mode--previous-row
+    (unless (eq sqlite3-mode--processing-row
                 (get-text-property (point) 'sqlite3-mode-row))
       (sqlite3-mode--apply-changes)
       (let ((msg (sqlite3-mode--get-error)))
@@ -569,8 +573,7 @@ if you want."
 (defun sqlite3-mode--highlight-selected ()
   (let ((ov (or sqlite3-mode--highlight-overlay
                 (let ((tmp (make-overlay (point-max) (point-max))))
-                  ;;TODo face
-                  (overlay-put tmp 'face 'match)
+                  (overlay-put tmp 'face 'sqlite3-selected-face)
                   tmp))))
     (cond
      ((memq ov (overlays-at (point))))
@@ -632,15 +635,25 @@ if you want."
      :background "LightSteelBlue" :foreground "black")
     (((class color))
      (:background "white" :foreground "black")))
-  "*Face to fontify background of header line."
-  :group 'faces)
+  "Face to fontify background of header line."
+  :group 'sqlite3)
+
+(defface sqlite3-selected-face
+  '((t (:inherit match)))
+  "Face for highlighting current cell."
+  :group 'sqlite3)
+
+(defface sqlite3-error-line-face
+  '((t (:inherit isearch-fail)))
+  "Face for highlighting failed part in changing row."
+  :group 'sqlite3)
 
 (defun sqlite3-header-background-propertize (string)
   (let ((end (length string)))
     (add-text-properties 0 end
-                         (list
-                          'face (list 'sqlite3-header-background)
-                          'tab-separator t)
+                         `(
+                           face sqlite3-header-background
+                                tab-separator t)
                          string)
     string))
 
@@ -680,7 +693,7 @@ if you want."
                    'sqlite3-error-line-p t))
 
 (defun sqlite3-mode--apply-changes ()
-  (let ((row (sqlite3-mode--convert-row sqlite3-mode--previous-row))
+  (let ((row (sqlite3-mode--convert-row sqlite3-mode--processing-row))
         (not-found))
     (save-excursion
       (setq not-found (null (sqlite3-mode--goto-rowid (car row))))
@@ -693,13 +706,15 @@ if you want."
            (sqlite3-mode-read-data query) ; no read. wait until prompt.
            (let* ((last (sqlite3-mode-read-data "SELECT LAST_INSERT_ROWID()"))
                   (rowid (caar last)))
-             (sqlite3-mode--sync-row rowid)))))
+             (sqlite3-mode--sync-row rowid))))
+        (setq sqlite3-mode--processing-row nil))
        ((sqlite3-mode--row-is-modified row)
         (sqlite3-mode--update-with-handler
          (let ((query (sqlite3-mode--update-query row)))
            (message "Updating...")
            (sqlite3-mode-read-data query) ; no read. wait until prompt.
-           (sqlite3-mode--sync-row (car row)))))))))
+           (sqlite3-mode--sync-row (car row))))
+        (setq sqlite3-mode--processing-row nil))))))
 
 (defun sqlite3-mode--goto-rowid (rowid)
   (let ((first (point)))
@@ -711,15 +726,10 @@ if you want."
           do (forward-line 1)
           finally (goto-char first))))
 
-(defface sqlite3-error-line-face
-  '((t (:inherit isearch-fail)))
-  "Face for highlighting failed part in Isearch echo-area message."
-  :group 'sqlite3)
-
 (defun sqlite3-mode--convert-row (row)
   (cons
-   (plist-get (cdr row) :rowid)
-   (loop for c in (plist-get (cdr row) :cells)
+   (plist-get row :rowid)
+   (loop for c in (plist-get row :cells)
          collect (let ((col (plist-get c :column)))
                    (list
                     (plist-get col :name)
@@ -732,9 +742,8 @@ if you want."
                (overlays-in (point-min) (point-max)))))
     (cond
      ((null errs) t)
-      ;;TODO
      ((y-or-n-p "Non saved lines are exists. Really continue? ") t)
-     (t nil))))
+     (t (signal 'quit nil)))))
 
 (defvar sqlite3-mode--previous-hscroll nil)
 (make-variable-buffer-local 'sqlite3-mode--previous-hscroll)
@@ -792,7 +801,7 @@ if you want."
                (let ((cell (sqlite3-mode--insert-cell v i nil)))
                  (setq cells (cons cell cells))
                  (plist-put cell :source-value v))))
-    (plist-put (cdr rowobj) :cells (nreverse cells))
+    (plist-put rowobj :cells (nreverse cells))
     (put-text-property
      (line-beginning-position) (line-end-position)
      'sqlite3-mode-row rowobj)))
