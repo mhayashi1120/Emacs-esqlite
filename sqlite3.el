@@ -99,6 +99,7 @@
     (define-key map "k" 'sqlite3-mode-previous-row)
     (define-key map "j" 'sqlite3-mode-next-row)
     ;TODO
+    (define-key map "\C-c\C-s" 'sqlite3-mode-switch-schema-view)
     (define-key map "\C-c\C-f" 'sqlite3-mode-narrow-down)
     (define-key map "\C-c\C-o" 'sqlite3-mode-open-table)
 
@@ -107,7 +108,20 @@
 (defvar sqlite3-mode--stream nil)
 (make-variable-buffer-local 'sqlite3-mode--stream)
 
-(defvar sqlite3-mode-hook nil)
+(defcustom sqlite3-mode-hook nil
+  "Hook called enter the `sqlite3-mode'."
+  :group 'sqlite3
+  :type 'hook)
+
+(defvar sqlite3-mode-before-transaction-hook nil)
+  ;; "Run before transaction is started."
+  ;; :group 'sqlite3
+  ;; :type 'hook)
+
+(defvar sqlite3-mode-after-transaction-hook nil)
+  ;; "Run after transaction is finished. (commit / rollback)"
+  ;; :group 'sqlite3
+  ;; :type 'hook)
 
 (defconst sqlite3--rowid-columns
   '("_ROWID_" "ROWID" "OID"))
@@ -132,8 +146,8 @@
 (defun sqlite3-mode-put (key value)
   (plist-put sqlite3-mode--context key value))
 
+;;TODO -> sqlite3-view-mode
 (defun sqlite3-mode ()
-  (interactive)
   (unless buffer-file-name
     (error "Not a file buffer"))
   (kill-all-local-variables)
@@ -143,12 +157,17 @@
   (setq truncate-lines t)
   (setq indent-tabs-mode nil)
   (set (make-local-variable 'backup-inhibited) t)
-  (setq revert-buffer-function
-        'sqlite3-mode-revert-buffer)
-  (setq sqlite3-mode--context
-        (sqlite3-mode--create-context))
   ;; disable creating #hoge.sqlite# file
   (auto-save-mode -1)
+  (setq sqlite3-mode--context
+        (sqlite3-mode--create-context))
+  (sqlite3-mode-setup-mode-line)
+  (run-mode-hooks 'sqlite3-mode-hook))
+
+(defun sqlite3-mode-table-view ()
+  (sqlite3-mode-put :mode 'table)
+  (setq revert-buffer-function
+        'sqlite3-mode-revert-buffer)
   (add-hook 'post-command-hook
             'sqlite3-mode--post-command nil t)
   (add-hook 'pre-command-hook
@@ -163,12 +182,10 @@
     ;; forcibly disable the customize variable
     (setq sqlite3-use-highlight-line nil)))
   (use-local-map sqlite3-mode-map)
-  (sqlite3-mode-setup-mode-line)
   (unless sqlite3-mode--popup-timer
     (setq sqlite3-mode--popup-timer
           (run-with-idle-timer
-           1 t 'sqlite3-mode-popup-contents)))
-  (run-mode-hooks 'sqlite3-mode-hook))
+           1 t 'sqlite3-mode-popup-contents))))
 
 (defun sqlite3-mode-view-cell ()
   "View current cell with opening subwindow."
@@ -467,34 +484,31 @@ if you want."
             (when value
               (sqlite3-mode-tooltip-show value))))))))
 
-(defconst sqlite3-mode-line-format
-  '(
-    (:eval
-     (when (sqlite3-mode-get :table)
-         (concat " ["
-                 (propertize
-                  (format "%s:%d/%s"
-                          (sqlite3-mode-get :table)
-                          (1+ (sqlite3-mode-get :page))
-                          (or (sqlite3-mode-get :max-page) "Unknown"))
-                  'face 'mode-line-emphasis)
-                 "]")))
-    (:eval
-     (concat
-      " "
-      (let ((status (sqlite3-mode-stream-status)))
-        (cond
-         ((eq status 'prompt)
-          (propertize "Run" 'face 'minibuffer-prompt))
-         ((eq status 'transaction)
-          (propertize "Transaction" 'face 'compilation-info))
-         ((eq status 'querying)
-          (propertize "Querying" 'face 'compilation-warning))
-         (t
-          (propertize "No Process" 'face 'shadow))))))))
-
 (defun sqlite3-mode-setup-mode-line ()
-  (setq mode-line-process sqlite3-mode-line-format))
+  (setq mode-line-process
+        '((:eval
+           (when (and (eq (sqlite3-mode-get :mode) 'table)
+                      (sqlite3-mode-get :table))
+             (concat " ["
+                     (propertize (sqlite3-mode-get :table)
+                                 'face 'sqlite3-mode-table-face)
+                     (format ":%d/%s"
+                             (1+ (sqlite3-mode-get :page))
+                             (or (sqlite3-mode-get :max-page) "Unknown"))
+                     "]")))
+          (:eval
+           (concat
+            " "
+            (let ((status (sqlite3-mode-stream-status)))
+              (cond
+               ((eq status 'prompt)
+                (propertize "Run" 'face 'minibuffer-prompt))
+               ((eq status 'transaction)
+                (propertize "Transaction" 'face 'compilation-info))
+               ((eq status 'querying)
+                (propertize "Querying" 'face 'compilation-warning))
+               (t
+                (propertize "No Process" 'face 'shadow)))))))))
 
 (defvar sqlite3-mode-cell-buffer " *Sqlite3 Cell* ")
 
@@ -680,7 +694,7 @@ if you want."
     (cond
      ((memq ov (overlays-at (point))))
      ((get-text-property (point) 'sqlite3-mode-cell (current-buffer))
-      (let* ((region (sqlite3-text-property-region (point) 'sqlite3-mode-cell))
+      (let* ((region (sqlite3-mode--cell-region (point)))
              (start (car region))
              (end (cdr region)))
         (move-overlay ov start end)
@@ -688,15 +702,20 @@ if you want."
      (t
       (move-overlay ov (point-max) (point-max))))))
 
-(defun sqlite3-text-property-region (point property)
+(defun sqlite3-mode--cell-region (point)
+  (sqlite3-mode-property-region point 'sqlite3-mode-cell t))
+
+(defun sqlite3-mode-property-region (point property &optional restrict-line)
   (let ((val (get-text-property point property)))
     (and val
          (let* ((start (previous-single-property-change
                         point property
-                        nil (line-beginning-position)))
+                        nil (or (and restrict-line (line-beginning-position))
+                                (point-min))))
                 (end (next-single-property-change
                       point property
-                      nil (line-end-position))))
+                      nil (or (and restrict-line (line-end-position))
+                              (point-max)))))
            (unless (eq (get-text-property start property) val)
              (setq start (point)))
            (unless (eq (get-text-property (1- end) property) val)
@@ -704,7 +723,7 @@ if you want."
            (cons start end)))))
 
 (defun sqlite3-mode--previous-cell (point &optional current-line)
-  (let ((region (sqlite3-text-property-region point 'sqlite3-mode-cell)))
+  (let ((region (sqlite3-mode--cell-region point)))
     (cond
      ((null region)
       (previous-single-property-change
@@ -716,7 +735,7 @@ if you want."
       (sqlite3-mode--previous-cell (1- (car region)) current-line)))))
 
 (defun sqlite3-mode--next-cell (point &optional current-line)
-  (let ((region (sqlite3-text-property-region point 'sqlite3-mode-cell)))
+  (let ((region (sqlite3-mode--cell-region point)))
     (next-single-property-change
      (or (cdr region) point)
      'sqlite3-mode-cell nil
@@ -745,7 +764,7 @@ if you want."
   :group 'sqlite3)
 
 (defface sqlite3-selected-face
-  '((t (:inherit match)))
+  '((t (:inherit mode-line-highlight)))
   "Face for highlighting current cell."
   :group 'sqlite3)
 
@@ -757,6 +776,17 @@ if you want."
 (defface sqlite3-null-face
   '((t (:inherit font-lock-keyword-face)))
   "Face for any NULL."
+  :group 'sqlite3)
+
+(defface sqlite3-mode-table-face
+  '((t (:inherit font-lock-function-name-face)))
+  "todo Face to fontify background of header line."
+  :group 'sqlite3)
+
+;;TODO use sqlite3-mode header-line?
+(defface sqlite3-mode-column-face
+  '((t (:inherit font-lock-variable-name-face)))
+  "todo Face to fontify background of header line."
   :group 'sqlite3)
 
 (defun sqlite3-mode--propertize-background-header (string)
@@ -880,7 +910,8 @@ if you want."
                               ;; Beginning of line header may have too short length of name.
                               (make-string wid ?\s))
                              (t
-                              (sqlite3-mode--truncate-text wid name))))))
+                              (propertize (sqlite3-mode--truncate-text wid name)
+                                          'face 'sqlite3-mode-column-face))))))
            (filler (make-string (frame-width) ?\s))
            (tail (sqlite3-mode--propertize-background-header filler)))
       (setq header-line-format
@@ -966,7 +997,7 @@ if you want."
 
 (defun sqlite3-mode--replace-current-cell (value)
   (let* ((pos (point))                  ;save position
-         (region (sqlite3-text-property-region pos 'sqlite3-mode-cell)))
+         (region (sqlite3-mode--cell-region pos)))
     (unless region
       (error "Not a cell"))
     (let* ((cell (get-text-property pos 'sqlite3-mode-cell))
@@ -989,6 +1020,7 @@ if you want."
   (interactive
    (let ((table (sqlite3-mode--read-table)))
      (list table)))
+  (sqlite3-mode-table-view)
   (sqlite3-mode--check-stream)
   (let ((info (sqlite3-table-schema sqlite3-mode--stream table)))
     (unless (sqlite3-mode-draw-page table 0)
@@ -1149,16 +1181,19 @@ if you want."
      (t 'querying))))
 
 (defun sqlite3-mode--transaction-begin ()
+  (run-hooks 'sqlite3-mode-before-transaction-hook)
   (sqlite3-mode--execute-sql "BEGIN")
   (sqlite3-mode-put :transaction t))
 
 (defun sqlite3-mode--transaction-rollback ()
   (sqlite3-mode--execute-sql "ROLLBACK")
-  (sqlite3-mode-put :transaction nil))
+  (sqlite3-mode-put :transaction nil)
+  (run-hooks 'sqlite3-mode-after-transaction-hook))
 
 (defun sqlite3-mode--transaction-commit ()
   (sqlite3-mode--execute-sql "COMMIT")
-  (sqlite3-mode-put :transaction nil))
+  (sqlite3-mode-put :transaction nil)
+  (run-hooks 'sqlite3-mode-after-transaction-hook))
 
 (defun sqlite3-mode--update-sql (row)
   (format "UPDATE %s SET %s WHERE %s = %s;"
@@ -1206,7 +1241,8 @@ if you want."
       (with-current-buffer buf
         (set-visited-file-name db-file)
         (set-buffer-modified-p nil)
-        (sqlite3-mode)))
+        (sqlite3-mode)
+        (sqlite3-mode-switch-schema-view)))
     (switch-to-buffer buf)))
 
 ;;;
@@ -1274,6 +1310,7 @@ if you want."
                               "-init" (sqlite3--init-file)
                               "-csv" file)))
     (process-put proc 'sqlite3-stream-process-p t)
+    (process-put proc 'sqlite3-stream-filename file)
     (set-process-filter proc 'sqlite3-stream--filter)
     (set-process-sentinel proc 'sqlite3-stream--sentinel)
     (sqlite3-stream--wait proc)
@@ -1503,8 +1540,9 @@ Good: SELECT * FROM table1\n
 (defun sqlite3-tables (stream)
   (mapcar
    'car
-   (sqlite3-stream-execute-query
-    stream sqlite3-select-table-query)))
+   (cdr 
+    (sqlite3-stream-execute-query
+     stream sqlite3-select-table-query))))
 
 (defun sqlite3-table-schema (stream table)
   "Get TABLE information in FILE.
@@ -1580,6 +1618,184 @@ Elements of the item list are:
                  (val (cadr props)))
              (plist-put dest name val)))
   dest)
+
+
+
+;;;; TESTING
+
+(defconst sqlite3-schema-view--close-icon "[+]")
+(defconst sqlite3-schema-view--open-icon "[-]")
+
+(defun sqlite3-mode--faced-insert (face &rest args)
+  (let ((start (point)))
+    (apply 'insert args)
+    (put-text-property start (point) 'face face)))
+
+(defun sqlite3-draw-schema-view (tables)
+  (save-excursion
+    (remove-overlays (point-min) (point-max))
+    (let ((inhibit-read-only t))
+      (erase-buffer)
+      (mapc
+       (lambda (tbl)
+         (let ((start (point)))
+           (insert sqlite3-schema-view--close-icon)
+           (sqlite3-mode--faced-insert 'sqlite3-mode-table-face tbl)
+           (insert "\n\n")
+           (put-text-property 
+            start (line-beginning-position 0)
+            'sqlite3-schema-table `(:name ,tbl))))
+       tables))))
+
+(defvar sqlite3-schema-view-map nil)
+
+(unless sqlite3-schema-view-map
+  ;;TODO or is testing
+  (let ((map (or sqlite3-schema-view-map (make-sparse-keymap))))
+    (suppress-keymap map)
+
+    (define-key map "\C-m" 'sqlite3-schema-view-toggle-item)
+    (define-key map " " 'sqlite3-schema-view-toggle-item)
+    (define-key map "v" 'sqlite3-schema-view-open-table)
+    (define-key map "g" 'revert-buffer)
+
+    (define-key map "k" 'sqlite3-schema-view-previous-line)
+    (define-key map "j" 'sqlite3-schema-view-next-line)
+    (define-key map "p" 'sqlite3-schema-view-previous-line)
+    (define-key map "n" 'sqlite3-schema-view-next-line)
+
+    (setq sqlite3-schema-view-map map)))
+
+(defun sqlite3-schema-view--switch-icon (start icon)
+  (let ((first (point))
+        save-point)
+    (save-excursion
+      (goto-char start)
+      (unless (looking-at "[ \t]*\\(\\[[-+]\\]\\)")
+        (error "No icon is here"))
+      (let* ((start (match-beginning 1))
+             (end (match-end 1))
+             (props (text-properties-at start)))
+        (replace-match icon nil nil nil 1)
+        (set-text-properties start end props)
+        (when (and (<= start first) (<= first end))
+          (setq save-point t))))
+    (when save-point
+      (goto-char first))))
+
+(defun sqlite3-schema-view--set-open (region)
+  (sqlite3-schema-view--switch-icon
+   (car region) sqlite3-schema-view--open-icon))
+
+(defun sqlite3-schema-view--set-close (region)
+  (sqlite3-schema-view--switch-icon
+   (car region) sqlite3-schema-view--close-icon))
+
+(defun sqlite3-mode-switch-schema-view ()
+  (interactive)
+  (sqlite3-mode--check-stream)
+  (let* ((stream sqlite3-mode--stream)
+         (tbls (sqlite3-tables stream)))
+    (sqlite3-draw-schema-view tbls)
+    (use-local-map sqlite3-schema-view-map))
+  (setq revert-buffer-function 'sqlite3-schema-view-revert)     ;TODO
+  (when (fboundp 'hl-line-mode)
+    (hl-line-mode -1))
+  (setq buffer-read-only t)
+  (setq header-line-format nil)
+  (sqlite3-mode-put :mode 'schema)
+  (set-buffer-modified-p nil)
+  (run-hooks 'sqlite3-schema-view-hook) ;;TODO defcustom
+  )
+
+(defun sqlite3-schema-view-revert (&rest dummy)
+  (sqlite3-mode-switch-schema-view))
+
+(defun sqlite3-schema-view-open-table ()
+  (interactive)
+  (let ((table (get-text-property (point) 'sqlite3-schema-table)))
+    (unless table
+      (error "No table item is here"))
+    (let ((name (plist-get table :name)))
+      (sqlite3-mode-open-table name))))
+
+(defun sqlite3-schema-view-toggle-item ()
+  (interactive)
+  (let ((table (get-text-property (point) 'sqlite3-schema-table)))
+    (unless table
+      (error "No table item is here"))
+    (let ((region (sqlite3-mode-property-region (point) 'sqlite3-schema-table))
+          (child (plist-get table :child))
+          (name (plist-get table :name))
+          (inhibit-read-only t)
+          (modifiedp (buffer-modified-p)))
+      (cond
+       ((and child (not (overlay-get child 'invisible)))
+        (overlay-put child 'invisible t)
+        (sqlite3-schema-view--set-close region))
+       ((overlayp child)
+        (overlay-put child 'invisible nil)
+        (sqlite3-schema-view--set-open region))
+       (t
+        (sqlite3-mode--check-stream)
+        (save-excursion
+          (let ((schema (or (plist-get table :schema)
+                            (let ((s (sqlite3-schema-table-schame name)))
+                              (plist-put table :schema s)
+                              s))))
+            (goto-char (line-end-position))
+            (forward-line 1)
+            (let ((start (point)))
+              (insert "\n")
+              ;;TODO header? calculate width
+              (sqlite3-schema-view--insert-header 
+               '("NAME" "TYPE" "NOT NULL" "DEFAUTL" "KEY"))
+              (loop for (name type notnull default primaryp) in schema
+                    for i from 0
+                    do (progn
+                         (insert (make-string sqlite3-schema-view-indent-level ?\s))
+                         (sqlite3-mode--faced-insert 'sqlite3-mode-column-face name)
+                         (insert " ")
+                         (insert
+                          ;;TODO format other value
+                          (format "%s %s %s %s" type notnull default primaryp))
+                         (insert "\n")))
+              (put-text-property start (point) 'sqlite3-schema-table table)
+              (let ((ov (make-overlay start (point))))
+                (plist-put table :child ov)))
+            (sqlite3-schema-view--set-open region)))))
+      (set-buffer-modified-p modifiedp))))
+
+(defconst sqlite3-schema-view-indent-level 2)
+
+(defun sqlite3-schema-table-schame (table)
+  (loop for (idx name type notnull default primaryp)
+        in (sqlite3-table-schema
+            sqlite3-mode--stream name)
+        collect (list name type
+                      (or (and notnull "yes") "no")
+                      (or default "no")
+                      (or (and primaryp "yes") "no"))))
+
+(defun sqlite3-schema-view--insert-header (headers)
+  (let ((hdrs
+         (loop for h in headers
+               collect (propertize h 'face 'sqlite3-header-background))))
+    (insert
+     (make-string sqlite3-schema-view-indent-level ?\s)
+     (mapconcat
+      'identity
+      hdrs (propertize " " 'face 'mode-line-inactive))
+     "\n")))
+
+(defun sqlite3-schema-view-next-line ()
+  (interactive)
+  (forward-line 1))
+
+(defun sqlite3-schema-view-previous-line ()
+  (interactive)
+  (forward-line -1))
+
 
 (provide 'sqlite3)
 
