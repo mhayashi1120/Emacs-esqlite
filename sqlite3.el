@@ -885,7 +885,6 @@ if you want."
   (save-excursion
     (let* ((row (sqlite3-mode--convert-row sqlite3-mode--processing-row))
            (found (sqlite3-mode--goto-row sqlite3-mode--processing-row)))
-      ;;TODO keep column
       (cond
        ((not found))
        ((null (car row))
@@ -946,8 +945,8 @@ if you want."
   (when force
     (setq sqlite3-mode--previous-hscroll nil))
   (cancel-function-timers 'sqlite3-mode--draw-header)
-  ;; in the `post-command-hook', `window-hscroll' still return previous value.
-  ;; although after calling `scroll-right' return correct value.
+  ;; In the `post-command-hook', `window-hscroll' function still return 
+  ;; previous value. Although after calling `scroll-right' return correct value.
   (run-with-timer 0.1 nil 'sqlite3-mode--draw-header))
 
 (defun sqlite3-mode--draw-header ()
@@ -968,7 +967,8 @@ if you want."
                             (setq flag t)
                             (cond
                              ((< wid sqlite3-mode--cell-min-width)
-                              ;; Beginning of line header may have too short length of name.
+                              ;; Beginning of line header may have too short
+                              ;;  length of name.
                               (make-string wid ?\s))
                              (t
                               (propertize (sqlite3-mode--truncate-text wid name)
@@ -1158,6 +1158,7 @@ if you want."
     (erase-buffer)
     (remove-overlays (point-min) (point-max))))
 
+;;TODO refactor
 (defun sqlite3-mode-draw-page (table page &optional keep)
   ;; sync mtime with disk file.
   ;; to detect database modifying
@@ -1609,7 +1610,7 @@ Good: SELECT * FROM table1\n
 (defun sqlite3--read-csv-line ()
   (let ((first (point))
         (line (pcsv-read-line)))
-    (unless (memq (char-before) '(?\n ?\r))
+    (unless (bolp)
       (goto-char first)
       (signal 'invalid-read-syntax nil))
     line))
@@ -1890,6 +1891,74 @@ Elements of the item list are:
   (forward-line -1))
 
 (add-hook 'kill-emacs-hook 'sqlite3-killing-emacs)
+
+
+;; ORDERS ::= ORDER
+
+;; ORDER ::= (COLUMN TODO)
+
+(defun sqlite3-mode--compile-orders (orders)
+  (mapconcat
+   'sqlite3-mode--compile-order
+   orders
+   ", "))
+
+(defun sqlite3-mode--compile-order (order)
+  (let ((column (car order))
+        (todo (cadr order)))
+    (concat (plist-get column :name) " " todo)))
+
+;; FILTERS ::= (AND FILTER ...) | (OR FILTER ...)
+
+;; FILTER ::= (COLUMN OPERATOR) | (COLUMN OPERATOR EXP ...) | FILTERS
+
+(defconst sqlite3-mode--filter-operators
+  '(
+    ("is null" "IS NULL")
+    ("isnot null" "IS NOT NULL")
+    ("=" "=" value)
+    ("<=" "<=" value)
+    ("<" "<" value)
+    (">=" ">=" value)
+    (">" ">" value)
+    ("like" "LIKE" value)
+    ("between" "BETWEEN" value "AND" value)
+    ;;TODO
+    ))
+
+(defun sqlite3-mode--read-filter ()
+  (let ((op (completing-read 
+             "TODO: "
+             sqlite3-mode--filter-operators)))
+    ))
+
+(defun sqlite3-mode--compile-filters (filters)
+  (concat
+   "("
+   (mapconcat
+    'sqlite3-mode--compile-filter
+    (cdr filters) 
+    (cond ((eq (car filters) 'or) " OR ")
+          ((eq (car filters) 'and) " AND ")))
+   ")"))
+
+(defun sqlite3-mode--compile-filter (filter)
+  (cond
+   ((memq (car filter) '(or and))
+    (sqlite3-mode--compile-filters filter))
+   ((and (listp filter) (= (length filter) 2))
+    (let ((column (car filter))
+          (operator (cadr filter)))
+      (concat "(" (plist-get column :name) " " operator ")")))
+   ((and (listp filter) (> (length filter) 2))
+    (let ((column (car filter))
+          (operator (cadr filter))
+          (exps (cddr filter)))
+      (concat "(" (plist-get column :name) " " operator " " 
+              (mapconcat 'identity exps " ")
+              ")")))
+   (t
+    (error "Invalid filter %s" filter))))
 
 (provide 'sqlite3)
 
