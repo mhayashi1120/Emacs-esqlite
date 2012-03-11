@@ -1,11 +1,11 @@
-;;; sqlite3.el --- TODO
+;;; sqlite3.el --- sqlite3 file editing mode.
 
 ;; Author: Masahiro Hayashi <mhayashi1120@gmail.com>
 ;; Keywords: sqlite3
 ;; URL: http://github.com/mhayashi1120/sqlite3.el/raw/master/sqlite3.el
-;; Emacs: TODO GNU Emacs 24 or later
+;; Emacs: GNU Emacs 22 or later
 ;; Version: 0.0.0
-;; Package-Requires: ((pcsv "1.1.0"))
+;; Package-Requires: ((pcsv "1.2.0"))
 
 ;; This program is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU General Public License as
@@ -32,7 +32,11 @@
 
 ;;; Install:
 
-;;TODO
+;; (autoload 'sqlite3-find-file "sqlite3"
+;;   "Open as Sqlite3 database" t)
+
+;; (autoload 'sqlite3-file-guessed-database-p "sqlite3"
+;;   "Guess the file is a sqlite3 database or not")
 
 ;;; TODO:
 ;; * incremental search all data in table
@@ -56,8 +60,20 @@
 (require 'pcsv)
 
 (defgroup sqlite3 ()
-  "Manipulate Sqlite3 Database."
+  "Manipulate sqlite3 database."
   :group 'applications)
+
+;; external variables
+(defvar indent-tabs-mode)
+(defvar revert-buffer-function)
+(defvar last-command)
+(defvar tool-bar-mode)
+(defvar tool-bar-images-pixel-height)
+(defvar menu-bar-mode)
+(defvar last-command)
+(defvar quit-flag)
+(defvar with-timeout-timers)
+(defvar revert-buffer-function)
 
 (defcustom sqlite3-program "sqlite3"
   "Command name or path to command."
@@ -121,15 +137,15 @@
   :group 'sqlite3
   :type 'hook)
 
-(defvar sqlite3-mode-before-transaction-hook nil)
-  ;; "Run before transaction is started."
-  ;; :group 'sqlite3
-  ;; :type 'hook)
+(defcustom sqlite3-mode-before-transaction-hook nil
+  "Run before transaction is started."
+  :group 'sqlite3
+  :type 'hook)
 
-(defvar sqlite3-mode-after-transaction-hook nil)
-  ;; "Run after transaction is finished. (commit / rollback)"
-  ;; :group 'sqlite3
-  ;; :type 'hook)
+(defcustom sqlite3-mode-after-transaction-hook nil
+  "Run after transaction is finished. (commit / rollback)"
+  :group 'sqlite3
+  :type 'hook)
 
 (defconst sqlite3--rowid-columns
   '("_ROWID_" "ROWID" "OID"))
@@ -545,9 +561,13 @@ if you want."
              (concat " ["
                      (propertize (sqlite3-mode-get :table)
                                  'face 'sqlite3-mode-table-face)
-                     (format ":%d/%s"
-                             (1+ (sqlite3-mode-get :page))
-                             (or (sqlite3-mode-get :max-page) "Unknown"))
+                     ":"
+                     (let ((max (sqlite3-mode-get :max-page)))
+                       (if (and (numberp max) (zerop max))
+                           "(No Data)"
+                         (format "%d/%s"
+                                 (1+ (sqlite3-mode-get :page))
+                                 (or max "Unknown"))))
                      "]")))
           (:eval
            (concat
@@ -623,9 +643,11 @@ if you want."
              (+ (sqlite3-mode-tooltip-frame-posn 'left)
                 (cdr xy)
                 ;; FIXME calculate fringe of bar roughly..
-                (* (or (and tool-bar-mode tool-bar-images-pixel-height) 0)
+                (* (or (and (boundp 'tool-bar-mode)
+                            tool-bar-mode tool-bar-images-pixel-height) 0)
                    1.5)
-                (* (or (and menu-bar-mode (frame-char-height)) 0)
+                (* (or (and (boundp 'menu-bar-mode)
+                            menu-bar-mode (frame-char-height)) 0)
                    1.5)))))
     (cons x y)))
 
@@ -704,8 +726,7 @@ if you want."
       (signal (car err) (cdr err)))))
 
 (defun sqlite3-mode--sync-row (point row)
-  ;;TODO rowid will be changed if changing primary key value..
-  ;;TODO when table have _rowid_, oid, rowid all column ...
+  ;; FIXME when table have _rowid_, oid, rowid all meta columns.
   (let* ((new-rowid (sqlite3-mode--new-rowid row))
          (query (format "SELECT %s, * FROM %s WHERE %s = %s"
                         (sqlite3-mode-get :rowid-name)
@@ -726,8 +747,10 @@ if you want."
      ((or (/= (length keys) 1)
           ;;TODO only INTEGER? NUMERIC?
           (not (equal (nth 2 (car keys)) "INTEGER")))
+      ;; ROWID
       (car row))
      (t
+      ;; single INTEGER primary key is used as ROWID
       (let ((pair (assoc (nth 1 (car keys)) row)))
         (if (and pair (nth 2 pair))
             ;; primary key value
@@ -1075,7 +1098,7 @@ if you want."
 ;;TODO hack function make obsolete later
 (defun sqlite3-mode-open-table (table)
   (interactive
-   (let ((table (sqlite3-mode--read-table)))
+   (let ((table (sqlite3-mode--read-table-name)))
      (list table)))
   (sqlite3-mode--check-stream)
   (sqlite3-mode-table-view)
@@ -1083,7 +1106,7 @@ if you want."
     (error "No data")))
 
 (defvar sqlite3-mode-read-table-history nil)
-(defun sqlite3-mode--read-table ()
+(defun sqlite3-mode--read-table-name ()
   (sqlite3-mode--check-stream)
   ;;TODO accept subquery?
   ;;   -> read-only view.
@@ -1137,7 +1160,7 @@ if you want."
          (data (sqlite3-mode-query query t))
          (max (caar data)))
     (and (string-match "^\\([0-9]+\\)" max)
-         (match-string 1 max))))
+         (string-to-number (match-string 1 max)))))
 
 (defun sqlite3-mode--schema-rowid (schema)
   (loop for r in sqlite3--rowid-columns
@@ -1153,6 +1176,10 @@ if you want."
     (erase-buffer)
     (remove-overlays (point-min) (point-max))))
 
+;;TODO
+(defun sqlite3-mode--read-data ()
+  )
+
 ;;TODO refactor
 (defun sqlite3-mode-draw-page (table page &optional keep)
   ;; sync mtime with disk file.
@@ -1160,56 +1187,59 @@ if you want."
   ;; between reading from disk and beginning of transaction.
   (sqlite3-mode--sync-modtime)
   (save-excursion
-    (prog1
-        (let* ((schema (sqlite3-table-schema
-                        sqlite3-mode--stream table))
-               (rowid-name (sqlite3-mode--schema-rowid schema))
-               (where (or (sqlite3-mode-get :where) "1 = 1"))
-               (order (sqlite3-mode-get :order))
-               (order-by (or (and order (format "ORDER BY %s" order)) ""))
-               (row (or (sqlite3-mode-get :page-row) 100))
-               (query (format
-                       (concat "SELECT %s, *"
-                               " FROM %s"
-                               " WHERE %s"
-                               " %s"
-                               " LIMIT %s OFFSET %s * %s")
-                       rowid-name
-                       table where order-by
-                       row row
-                       page))
-               (data (sqlite3-mode-query query)))
-          (sqlite3-mode-put :rowid-name rowid-name)
-          (unless keep
-            (sqlite3-mode--clear-page))
-          (cond
-           ((or data
-                (not (equal (sqlite3-mode-get :table) table)))
-            (sqlite3-mode--clear-page)
-            (sqlite3-mode-put :max-page nil)
-            (sqlite3-mode-put :schema schema)
-            (sqlite3-mode-put :table table)
-            (sqlite3-mode-put :page page)
-            (sqlite3-mode--set-header data schema)
-            (let ((inhibit-read-only t))
-              (mapc
-               (lambda (row)
-                 (sqlite3-mode--insert-row row)
-                 (insert "\n"))
-               ;; ignore header row
-               (cdr data))
-              (set-buffer-modified-p nil))
-            (setq buffer-read-only t)
+    (let (data)
+      (prog1
+          (let* ((schema (sqlite3-table-schema
+                          sqlite3-mode--stream table))
+                 (rowid-name (sqlite3-mode--schema-rowid schema))
+                 (where (or (sqlite3-mode-get :where) "1 = 1"))
+                 (order (sqlite3-mode-get :order))
+                 (order-by (or (and order (format "ORDER BY %s" order)) ""))
+                 (row (or (sqlite3-mode-get :page-row) 100))
+                 (query (format
+                         (concat "SELECT %s, *"
+                                 " FROM %s"
+                                 " WHERE %s"
+                                 " %s"
+                                 " LIMIT %s OFFSET %s * %s")
+                         rowid-name
+                         table where order-by
+                         row row
+                         page)))
+            (setq data (sqlite3-mode-query query))
+            (sqlite3-mode-put :rowid-name rowid-name)
+            (unless keep
+              (sqlite3-mode--clear-page))
+            (cond
+             ((or data
+                  (not (equal (sqlite3-mode-get :table) table)))
+              (sqlite3-mode--clear-page)
+              (sqlite3-mode-put :max-page nil)
+              (sqlite3-mode-put :schema schema)
+              (sqlite3-mode-put :table table)
+              (sqlite3-mode-put :page page)
+              (sqlite3-mode--set-header data schema)
+              (let ((inhibit-read-only t))
+                (mapc
+                 (lambda (row)
+                   (sqlite3-mode--insert-row row)
+                   (insert "\n"))
+                 ;; ignore header row
+                 (cdr data))
+                (set-buffer-modified-p nil))
+              (setq buffer-read-only t)
+              t)
+             (t
+              (sqlite3-mode--set-header nil schema)
+              nil)))
+        (if data
             (run-with-idle-timer
              1 nil 'sqlite3-mode--delay-max-page
              (current-buffer))
-            t)
-           (t
-            (sqlite3-mode--set-header nil schema)
-            nil)))
-      (unless keep
-        ;; redraw header forcibly
-        (sqlite3-mode--delayed-draw-header t)))))
+          (sqlite3-mode-put :max-page 0))
+        (unless keep
+          ;; redraw header forcibly
+          (sqlite3-mode--delayed-draw-header t))))))
 
 (defun sqlite3-mode--set-header (data &optional schema)
   (let* ((lis (or data
@@ -1304,6 +1334,7 @@ if you want."
 
 ;;;###autoload
 (defun sqlite3-find-file (db-file)
+  "Open DB-FILE as Sqlite3 database"
   (interactive "FSqlite3 File: ")
   (unless (sqlite3-file-guessed-database-p db-file)
     (error "Not a valid database file"))
@@ -1541,6 +1572,7 @@ Good: SELECT * FROM table1\n
   ;; Other code affect to buffer while `sleep-for'.
   ;; TODO timer? filter? I can't get clue.
   (save-excursion
+    ;; Achieve like a asynchronously behavior (ex: draw mode line)
     (redisplay)
     (sleep-for seconds)))
 
@@ -1565,16 +1597,21 @@ Good: SELECT * FROM table1\n
 
 ;;;###autoload
 (defun sqlite3-file-guessed-database-p (file)
-  (with-temp-buffer
-    (insert-file-contents file nil 0 256)
-    (looking-at sqlite3-file-header-regexp)))
+  "Guess the FILE is a sqlite3 database or not."
+  (and (file-regular-p file)
+       (with-temp-buffer
+         (insert-file-contents file nil 0 256)
+         (looking-at sqlite3-file-header-regexp))))
 
 (defun sqlite3-prompt-p ()
-  ;;TODO continue prompt.
   (save-excursion
     (goto-char (point-max))
     (forward-line 0)
+    ;;TODO how to handle continue prompt.
+    ;; (looking-at "^\\(?:sqlite\\|   \\.\\.\\.\\)> \\'")
     (looking-at "^sqlite> \\'")))
+
+    
 
 (defun sqlite3--read-csv-with-deletion ()
   "Read csv data from current point. Delete csv data if read was succeeded."
@@ -1662,32 +1699,45 @@ Elements of the item list are:
 ;;; Synchronous utilities
 ;;;
 
-(defmacro sqlite3-with-file-stream (file stream-var &rest form)
-  (declare (indent 2))
-  `(let ((,stream-var (sqlite3-stream-open file)))
+(defmacro sqlite3--call/stream (file proc)
+  (declare (indent 1))
+  `(let* ((inhibit-redisplay t)         ; like a synchronously function
+          (stream (sqlite3-stream-open file)))
      (unwind-protect
-         (progn ,@form)
-       (sqlite3-stream-close ,stream-var))))
+         (funcall ,proc stream)
+       (sqlite3-stream-close stream))))
 
-;; TODO order by where
-(defun sqlite3-file-read-table (file table)
-  (sqlite3-with-file-stream file stream
-    (sqlite3-stream-execute-query
-     stream (format "SELECT * FROM %s" table))))
+(defun sqlite3-file-read-table (file table &optional where order)
+  "Read TABLE data from sqlite3 FILE.
+WHERE and ORDER is string that is passed through to sql query.
+"
+  (sqlite3--call/stream file 
+    (lambda (stream)
+      (sqlite3-stream-execute-query
+       stream (format "SELECT * FROM %s WHERE %s %s" 
+                      table
+                      (or where "1 = 1")
+                      (or (and order
+                               (concat "ORDER BY " order))
+                          ""))))))
 
 (defun sqlite3-file-tables (file)
-  (sqlite3-with-file-stream file stream
-    (sqlite3-tables stream)))
+  "sqlite3 FILE tables"
+  (sqlite3--call/stream file
+    (lambda (stream)
+      (sqlite3-tables stream))))
 
 (defun sqlite3-file-table-columns (file table)
+  "sqlite3 FILE TABLE columns"
   (mapcar
    (lambda (r) (nth 1 r))
    (sqlite3-file-table-schema file table)))
 
 (defun sqlite3-file-table-schema (file table)
   "See `sqlite3-table-schema'"
-  (sqlite3-with-file-stream file stream
-    (sqlite3-table-schema stream table)))
+  (sqlite3--call/stream file
+    (lambda (stream)
+      (sqlite3-table-schema stream table))))
 
 ;;TODO
 (defun sqlite3-plist-clone (plist)
