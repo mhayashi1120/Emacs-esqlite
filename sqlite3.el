@@ -163,10 +163,10 @@
 
 (defun sqlite3-mode--new-context ()
   (setq sqlite3-mode--context
-        (list 
+        (list
          :mode nil
          :table (list :name nil :schema nil :rowid-name)
-         :view (list :max-page nil 
+         :view (list :max-page nil
                      :page-row sqlite3-mode--default-page-rows
                      :columns nil)
          :transaction nil
@@ -1170,7 +1170,7 @@ if you want."
 
 (defun sqlite3-mode-max-page ()
   (let* ((query (format
-                 (concat 
+                 (concat
                   "SELECT ROUND((COUNT(*) / %s) + 0.5)"
                   " FROM %s "
                   " WHERE %s")
@@ -1223,7 +1223,7 @@ if you want."
     (plist-put table :schema schema)
     (plist-put table :rowid-name rowid-name)))
 
-;;TODO refactor 
+;;TODO refactor
 ;;todo remove force
 (defun sqlite3-mode--draw-page (source &optional force)
   ;; sync mtime with disk file.
@@ -1235,7 +1235,7 @@ if you want."
            (name (plist-get table :name))
            (schema (plist-get table :schema))
            (rowid-name (plist-get table :rowid-name))
-           (page-row (or (sqlite3-mode-ref :view :page-row) 
+           (page-row (or (sqlite3-mode-ref :view :page-row)
                          sqlite3-mode--default-page-rows))
            (page (or (plist-get source :page) 0))
            (where (or (plist-get source :where) "1 = 1"))
