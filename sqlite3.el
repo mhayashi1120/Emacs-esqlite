@@ -26,6 +26,7 @@
 
 ;; TODO
 
+;; * save-all-buffers...
 ;; * Specification
 ;; allow invalid character in data.
 ;; disallow invalid character in column and table.
@@ -577,7 +578,7 @@ if you want."
                        (if (and (numberp max) (zerop max))
                            "(No Data)"
                          (format "%d/%s"
-                                 (1+ (sqlite3-mode-ref :view :page))
+                                 (1+ (sqlite3-mode-ref :source :page))
                                  (or max "Unknown"))))
                      "]")))
           (:eval
@@ -1114,16 +1115,10 @@ if you want."
   (sqlite3-mode--check-stream)
   (sqlite3-mode-table-view)
   (sqlite3-mode--load-schema table)
-  (let ((new (copy-sequence (sqlite3-mode-ref :source))))
-    (sqlite3-mode--draw-page new)
-    (cond
-     ((equal table (sqlite3-mode-ref :table :name))
-      ;; redraw header forcibly
-      (sqlite3-mode--delayed-draw-header t)
-      t)
-     (t
-      (sqlite3-mode--clear-page)
-      (error "No data")))))
+  (let ((source (copy-sequence (sqlite3-mode-ref :source))))
+    (sqlite3-mode--draw-page source)
+    ;; redraw header forcibly
+    (sqlite3-mode--delayed-draw-header t)))
 
 (defvar sqlite3-mode-read-table-history nil)
 (defun sqlite3-mode--read-table-name ()
@@ -1201,10 +1196,6 @@ if you want."
     (erase-buffer)
     (remove-overlays (point-min) (point-max))))
 
-;;TODO
-(defun sqlite3-mode--read-data ()
-  )
-
 (defun sqlite3-mode--move-page (page error-message)
   (let ((new (copy-sequence (sqlite3-mode-ref :source))))
     (plist-put new :page page)
@@ -1263,7 +1254,6 @@ if you want."
            (data (sqlite3-mode-query query)))
       (cond
        (data
-        (sqlite3-mode-set source :source)
         (sqlite3-mode--clear-page)
         (sqlite3-mode--set-header data schema)
         (let ((inhibit-read-only t))
@@ -1271,14 +1261,19 @@ if you want."
           (dolist (row (cdr data))
             (sqlite3-mode--insert-row row)
             (insert "\n"))
-          (set-buffer-modified-p nil))
+          (unless(memq (sqlite3-mode-stream-status) '(transaction))
+            (set-buffer-modified-p nil)))
         (setq buffer-read-only t)
         (run-with-idle-timer
          1 nil 'sqlite3-mode--delay-max-page
          (current-buffer)))
+       ((> (plist-get source :page) 0)
+        (plist-put source :page (1- (plist-get source :page))))
        (t
+        (sqlite3-mode--clear-page)
         (sqlite3-mode--set-header nil schema)
-        (sqlite3-mode-set 0 :view :max-page))))))
+        (sqlite3-mode-set 0 :view :max-page)))
+      (sqlite3-mode-set source :source))))
 
 (defun sqlite3-mode--set-header (data &optional schema)
   (let* ((lis (or data
@@ -1513,12 +1508,11 @@ if you want."
 (defun sqlite3-stream--csv-filter (proc)
   (let* ((raw (sqlite3--read-csv-with-deletion))
          (null (process-get proc 'sqlite3-null-value))
-         (data (mapcar
-                (lambda (row)
-                  (mapcar
-                   (lambda (datum) (if (equal datum null) :null datum))
-                   row))
-                raw)))
+         (data (loop for row in raw
+                     collect (loop for datum in row
+                                   collect (if (equal datum null)
+                                               :null
+                                             datum)))))
     (setq sqlite3-stream--csv-accumulation
           (append sqlite3-stream--csv-accumulation data))))
 
@@ -1706,12 +1700,11 @@ Good: SELECT * FROM table1\n
   (sqlite3-objects stream "trigger"))
 
 (defun sqlite3-objects (stream type)
-  (let ((query
-         (format "SELECT name FROM sqlite_master WHERE type='%s'" type)))
-    (mapcar
-     'car
-     (cdr
-      (sqlite3-stream-execute-query stream query)))))
+  (let* ((query
+          (format "SELECT name FROM sqlite_master WHERE type='%s'" type))
+         (data (sqlite3-stream-execute-query stream query)))
+    (loop for row in (cdr data)
+          collect (car row))))
 
 (defun sqlite3-table-schema (stream table)
   "Get TABLE information in FILE.
@@ -1795,10 +1788,9 @@ WHERE and ORDER is string that is passed through to sql query.
   dest)
 
 (defun sqlite3--filter (filter list)
-  (delq nil
-        (mapcar
-         (lambda (o) (and (funcall filter o) o))
-         list)))
+  (loop for o in list
+        if (funcall filter o)
+        collect o))
 
 
 
