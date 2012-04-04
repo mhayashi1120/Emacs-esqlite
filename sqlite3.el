@@ -89,7 +89,7 @@
 
 (unless sqlite3-mode-map
 
-  (let ((map (or sqlite3-mode-map (make-sparse-keymap))))
+  (let ((map (make-sparse-keymap)))
 
     (suppress-keymap map)
 
@@ -158,11 +158,11 @@
 (defconst sqlite3--cell-min-width 3)
 
 (defun sqlite3-mode--create-context ()
-  `(:table nil :schema nil
-           :order nil :where nil
-           :page 0 :page-row ,sqlite3-mode--default-page-rows
-           :rowid-name nil
-           :columns nil))
+  (list :table nil :schema nil
+        :order nil :where nil
+        :page 0 :page-row sqlite3-mode--default-page-rows
+        :rowid-name nil
+        :columns nil))
 
 (defun sqlite3-mode-get (key)
   (plist-get sqlite3-mode--context key))
@@ -880,7 +880,7 @@ if you want."
   (let ((sep " "))
     (sqlite3-mode--propertize-background-header sep)
     (propertize sep 'display
-                '(space :width 1)))
+                (list 'space :width 1)))
   "String used to separate tabs.")
 
 (defun sqlite3-mode--put-error (msg)
@@ -1008,7 +1008,7 @@ if you want."
 
 (defun sqlite3-mode--insert-row (row)
   ;; (car row) is ROWID
-  (let ((rowobj `(:rowid ,(car row) :cells nil))
+  (let ((rowobj (list :rowid (car row) :cells nil))
         (cells nil))
     (loop for v in (cdr row)
           for i from 0
@@ -1029,8 +1029,8 @@ if you want."
          (wid (plist-get column :width))
          (truncated (sqlite3-mode--truncate-insert value wid))
          (cell (or cell
-                   `(:edit-value nil :truncated ,truncated
-                                 :column ,column))))
+                   (list :edit-value nil :truncated truncated
+                         :column column))))
     (let ((end (point)))
       (put-text-property start end 'sqlite3-mode-cell cell)
       cell)))
@@ -1333,16 +1333,16 @@ if you want."
   (sqlite3-mode-redraw-page))
 
 ;;;###autoload
-(defun sqlite3-find-file (db-file)
-  "Open DB-FILE as Sqlite3 database"
+(defun sqlite3-find-file (file)
+  "Open FILE as Sqlite3 database"
   (interactive "FSqlite3 File: ")
-  (unless (sqlite3-file-guessed-database-p db-file)
+  (unless (sqlite3-file-guessed-database-p file)
     (error "Not a valid database file"))
-  (let ((buf (get-file-buffer db-file)))
+  (let ((buf (get-file-buffer file)))
     (unless buf
-      (setq buf (create-file-buffer (file-name-nondirectory db-file)))
+      (setq buf (create-file-buffer (file-name-nondirectory file)))
       (with-current-buffer buf
-        (set-visited-file-name db-file)
+        (set-visited-file-name file)
         (set-buffer-modified-p nil)
         (sqlite3-mode)
         (sqlite3-mode-switch-schema-view)))
@@ -1783,15 +1783,15 @@ WHERE and ORDER is string that is passed through to sql query.
                                  (propertize name 'face 'sqlite3-mode-table-face)))
                  (put-text-property
                   start (point)
-                  'sqlite3-schema-item `(:type ,type))
+                  'sqlite3-schema-item (list :type type))
                  (insert "\n"))))))
 
 (defvar sqlite3-schema-view-map nil)
 
 ;; TODO reload schema
 (unless sqlite3-schema-view-map
-  ;;TODO or is testing
-  (let ((map (or sqlite3-schema-view-map (make-sparse-keymap))))
+
+  (let ((map (make-sparse-keymap)))
     (suppress-keymap map)
 
     (define-key map "\C-m" 'sqlite3-schema-view-toggle-item)
@@ -1899,7 +1899,7 @@ WHERE and ORDER is string that is passed through to sql query.
       (loop with start = (point)
             for tbl in tables
             do (let ((start (point))
-                     (table `(:type table :name ,tbl)))
+                     (table (list :type 'table :name tbl)))
                  (sqlite3-schema--draw-line
                   1
                   (format "%s%s\n"
