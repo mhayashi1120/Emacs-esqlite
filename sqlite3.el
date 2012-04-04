@@ -1220,12 +1220,10 @@ if you want."
               (sqlite3-mode-put :page page)
               (sqlite3-mode--set-header data schema)
               (let ((inhibit-read-only t))
-                (mapc
-                 (lambda (row)
-                   (sqlite3-mode--insert-row row)
-                   (insert "\n"))
-                 ;; ignore header row
-                 (cdr data))
+                ;; ignore header row
+                (dolist (row (cdr data))
+                  (sqlite3-mode--insert-row row)
+                  (insert "\n"))
                 (set-buffer-modified-p nil))
               (setq buffer-read-only t)
               t)
@@ -1483,12 +1481,24 @@ if you want."
     (setq sqlite3-stream--csv-accumulation
           (append sqlite3-stream--csv-accumulation data))))
 
+(defun sqlite3-temp-null (query)
+  (loop with key = (format "%s:%s" (current-time) query)
+        with hash = (md5 key)
+        for i from 0 below (length hash) by 2
+        concat (let* ((hex (substring hash i (+ i 2)))
+                      (c (string-to-number hex 16)))
+                 (char-to-string c))
+        into res
+        finally return
+        ;; md5 hex fold to base64 area
+        (let ((b64 (base64-encode-string res t)))
+          ;; sqlite3 command nullvalue assigned to 20 chars.
+          (substring b64 0 19))))
+
 (defun sqlite3-stream-execute-query (stream query)
   "Pass STREAM and QUERY to `sqlite3-stream-execute-sql'
 "
-  (let* ((key (format "%s:%s" (current-time) query))
-         ;; sqlite3 command nullvalue assigned to 20 chars.
-         (nullvalue (substring (md5 key) 0 19)))
+  (let ((nullvalue (sqlite3-temp-null query)))
     ;; handling NULL text
     (sqlite3-stream--send-command
      stream (format ".nullvalue '%s'\n" nullvalue))
@@ -1611,7 +1621,7 @@ Good: SELECT * FROM table1\n
     ;; (looking-at "^\\(?:sqlite\\|   \\.\\.\\.\\)> \\'")
     (looking-at "^sqlite> \\'")))
 
-    
+
 
 (defun sqlite3--read-csv-with-deletion ()
   "Read csv data from current point. Delete csv data if read was succeeded."
@@ -1687,13 +1697,11 @@ Elements of the item list are:
      stream (format "PRAGMA table_info(%s)" table)))))
 
 (defun sqlite3-killing-emacs ()
-  (mapc
-   (lambda (proc)
-     (when (process-get proc 'sqlite3-stream-process-p)
-       (condition-case err
-           (sqlite3-stream-close proc)
-         (error (message "Sqlite3: %s" err)))))
-   (process-list)))
+  (dolist (proc (process-list))
+    (when (process-get proc 'sqlite3-stream-process-p)
+      (condition-case err
+          (sqlite3-stream-close proc)
+        (error (message "Sqlite3: %s" err))))))
 
 ;;;
 ;;; Synchronous utilities
@@ -1711,10 +1719,10 @@ Elements of the item list are:
   "Read TABLE data from sqlite3 FILE.
 WHERE and ORDER is string that is passed through to sql query.
 "
-  (sqlite3--call/stream file 
+  (sqlite3--call/stream file
     (lambda (stream)
       (sqlite3-stream-execute-query
-       stream (format "SELECT * FROM %s WHERE %s %s" 
+       stream (format "SELECT * FROM %s WHERE %s %s"
                       table
                       (or where "1 = 1")
                       (or (and order
