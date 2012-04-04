@@ -365,20 +365,17 @@ if you want."
   "Jump to selected PAGE"
   (interactive
    (list (read-number "Page: ")))
-  (sqlite3-mode--before-draw-page)
-  (unless (sqlite3-mode-draw-page
-           (sqlite3-mode-get :table) (1- page) 'keep)
-    (error "No such page")))
+  (sqlite3-mode--before-draw-page
+   (1- page)
+   "No such page"))
 
 (defun sqlite3-mode-forward-page (&optional arg)
   "Forward page."
   (interactive "p")
   (sqlite3-mode--before-draw-page)
-  (unless (sqlite3-mode-draw-page
-           (sqlite3-mode-get :table)
-           (+ (sqlite3-mode-get :page) arg) 'keep)
-    (ding)
-    (message "No more next page")))
+  (sqlite3-mode-move-page
+   (+ (sqlite3-mode-get :page) arg)
+   "No more next page"))
 
 (defun sqlite3-mode-backward-page (&optional arg)
   "Backward page."
@@ -386,11 +383,9 @@ if you want."
   (when (= (sqlite3-mode-get :page) 0)
     (error "This is a first page"))
   (sqlite3-mode--before-draw-page)
-  (unless (sqlite3-mode-draw-page
-           (sqlite3-mode-get :table)
-           (- (sqlite3-mode-get :page) arg) 'keep)
-    (ding)
-    (message "No more previous page")))
+  (sqlite3-mode-move-page
+   (- (sqlite3-mode-get :page) arg)
+   "No more previous page"))
 
 (defun sqlite3-mode-next-row (&optional arg)
   "Goto next line of row."
@@ -1102,7 +1097,8 @@ if you want."
      (list table)))
   (sqlite3-mode--check-stream)
   (sqlite3-mode-table-view)
-  (unless (sqlite3-mode-draw-page table 0)
+  (unless (sqlite3-mode-open-page table 0)
+    ;;TODO
     (error "No data")))
 
 (defvar sqlite3-mode-read-table-history nil)
@@ -1138,7 +1134,7 @@ if you want."
   (when (sqlite3-mode-get :table)
     (let ((start (window-start))
           (pos (point)))
-      (sqlite3-mode-draw-page
+      (sqlite3-mode-open-page
        (sqlite3-mode-get :table)
        (sqlite3-mode-get :page))
       (goto-char pos)
@@ -1153,7 +1149,10 @@ if you want."
 
 (defun sqlite3-mode-max-page ()
   (let* ((query (format
-                 "SELECT ROUND((COUNT(*) / %s) + 0.5) FROM %s WHERE %s"
+                 (concat 
+                  "SELECT ROUND((COUNT(*) / %s) + 0.5)"
+                  " FROM %s "
+                  " WHERE %s")
                  (sqlite3-mode-get :page-row)
                  (sqlite3-mode-get :table)
                  (or (sqlite3-mode-get :where) "1 = 1")))
@@ -1179,6 +1178,21 @@ if you want."
 ;;TODO
 (defun sqlite3-mode--read-data ()
   )
+
+(defun sqlite3-mode-move-page (page error-message)
+  (sqlite3-mode-draw-page (sqlite3-mode-get :table) page t)
+  (cond
+   ((equal page (sqlite3-mode-get :page))
+    ;; redraw header forcibly
+    (sqlite3-mode--delayed-draw-header t))
+   (t
+    (ding)
+    (message "%s" error-message))))
+
+(defun sqlite3-mode-open-page (table page)
+  (sqlite3-mode-draw-page table page)
+  ;; redraw header forcibly
+  (sqlite3-mode--delayed-draw-header t))
 
 ;;TODO refactor
 (defun sqlite3-mode-draw-page (table page &optional keep)
@@ -1234,11 +1248,7 @@ if you want."
             (run-with-idle-timer
              1 nil 'sqlite3-mode--delay-max-page
              (current-buffer))
-          (sqlite3-mode-put :max-page 0))
-        (unless keep
-          (setq sqlite3-mode--previous-hscroll nil)
-          ;; redraw header forcibly
-          (sqlite3-mode--delayed-draw-header t))))))
+          (sqlite3-mode-put :max-page 0))))))
 
 (defun sqlite3-mode--set-header (data &optional schema)
   (let* ((lis (or data
