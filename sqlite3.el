@@ -1236,6 +1236,7 @@ if you want."
              (current-buffer))
           (sqlite3-mode-put :max-page 0))
         (unless keep
+          (setq sqlite3-mode--previous-hscroll nil)
           ;; redraw header forcibly
           (sqlite3-mode--delayed-draw-header t))))))
 
