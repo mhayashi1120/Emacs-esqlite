@@ -2066,6 +2066,116 @@ Good: SELECT * FROM table1\n
                   (not (sqlite3-prompt-p)))
         (sqlite3-sleep 0.1)))))
 
+;;;
+;;; Sqlite3 lazy reader
+;;;
+
+(defun sqlite3-reader-open (file query)
+  (let ((stream (sqlite3-stream-open file))
+        (nullvalue (sqlite3-temp-null query)))
+    ;; handling NULL text
+    (sqlite3-stream--send-command
+     stream (format ".nullvalue '%s'\n" nullvalue))
+    (process-put stream 'sqlite3-null-value nullvalue)
+    ;; send synchrounous variables.
+    (setq sqlite3-stream--filter-function nil)
+    ;; reset accumulate variable
+    (setq sqlite3-stream--csv-accumulation nil)
+    (sqlite3-stream-execute-sql stream query)
+    (list :stream stream :results nil
+          :position nil :fields nil)))
+
+(defun sqlite3-reader-close (reader)
+  (let ((stream (plist-get reader :stream)))
+    (sqlite3-stream-close stream)))
+
+(defun sqlite3-reader-open-p (reader)
+  (let ((stream (plist-get reader :stream)))
+    (eq (process-status stream) 'run)))
+
+(defun sqlite3-reader-read (reader)
+  (let ((stream (plist-get reader :stream))
+        (pos (plist-get reader :position))
+        (results (plist-get reader :results))
+        row)
+    (unless (eq (process-status stream) 'run)
+      (error "Stream is closed"))
+    (if (or 
+         ;; reader has not stepped yet.
+         (null pos)
+         ;; end of current reader
+         (>= pos (length results)))
+        (sqlite3-reader--step reader)
+      (let* ((max (1- (length results)))
+             (tidx (max (- max pos) 0)))
+        (prog1
+            (nth tidx results)
+          (plist-put reader :position (1+ pos)))))))
+
+(defun sqlite3-reader--step (reader)
+  (let ((stream (plist-get reader :stream))
+        (pos (plist-get reader :position))
+        row)
+    (catch 'eof
+      (with-current-buffer (process-buffer stream)
+        (while (= (point-min) (point-max))
+          (sit-for 0.1))
+        (goto-char (point-min))
+        (when (sqlite3-looking-at-prompt)
+          ;;TODO re-consider it!
+          (sqlite3-reader-close reader)
+          (throw 'eof nil))
+        (unless (plist-get reader :fields)
+          ;; throw away result of header
+          (let ((fields (sqlite3--read-csv-line)))
+            (delete-region (point-min) (point))
+            (plist-put reader :fields fields))
+          (plist-put reader :position 0)
+          (setq pos 0))
+        ;; read and 
+        (setq row (sqlite3--read-csv-line))
+        (delete-region (point-min) (point))
+        (plist-put reader :position (1+ pos))
+        (let* ((old (plist-get reader :results))
+               (new (cons row old)))
+          (plist-put reader :results new)))
+      row)))
+
+(defun sqlite3-reader-seek (reader pos)
+  (let ((res (plist-get reader :results)))
+    (cond 
+     ((< (length res) (1+ pos))
+      (while (and (sqlite3-reader-read reader)
+                  ;; read to specified position
+                  (< (plist-get reader :position) pos))))
+     (t
+      (plist-put reader :position pos)))
+    (plist-get reader :position)))
+
+;;TODO confising specification
+(defun sqlite3-reader-todo (reader &optional pos)
+  (setq pos
+        (cond 
+         ((null pos)
+          (plist-get reader :position))
+         ((sqlite3-reader-open-p reader)
+          ;; set new position to actual position
+          (sqlite3-reader-seek reader pos))
+         (t pos)))
+  (cond
+   ((null pos)
+    ;; reader has not yet opened.
+    (sqlite3-reader-read reader))
+   (t
+    (let* ((res (plist-get reader :results))
+           (max (1- (length res)))
+           (tidx (- max pos)))
+      (nth tidx res)))))
+
+;;;
+;;; TODO
+;;; 
+
 (defun sqlite3-sleep (seconds)
   ;; Other code affect to buffer while `sleep-for'.
   ;; TODO timer? filter? I can't get clue.
@@ -2099,7 +2209,10 @@ Good: SELECT * FROM table1\n
     (forward-line 0)
     ;; when executed sql contains newline, continue prompt displayed
     ;; before last prompt "sqlite> "
-    (looking-at "^\\( *\\.\\.\\.> \\)*sqlite> \\'")))
+    (sqlite3-looking-at-prompt)))
+
+(defun sqlite3-looking-at-prompt ()
+  (looking-at "^\\( *\\.\\.\\.> \\)*sqlite> \\'"))
 
 (defun sqlite3--read-csv-with-deletion ()
   "Read csv data from current point. Delete csv data if read was succeeded."
@@ -2110,6 +2223,7 @@ Good: SELECT * FROM table1\n
                 (l (sqlite3--read-csv-line)))
             (delete-region start (point))
             (setq res (cons l res))))
+      ;; output is proceeding from process
       ;; finish the reading
       (invalid-read-syntax nil))
     (nreverse res)))
