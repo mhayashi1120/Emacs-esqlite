@@ -2118,6 +2118,7 @@ Good: SELECT * FROM table1\n
         row)
     (catch 'eof
       (with-current-buffer (process-buffer stream)
+        ;; wait until output comes.
         (while (= (point-min) (point-max))
           (sit-for 0.1))
         (goto-char (point-min))
@@ -2126,13 +2127,13 @@ Good: SELECT * FROM table1\n
           (sqlite3-reader-close reader)
           (throw 'eof nil))
         (unless (plist-get reader :fields)
-          ;; throw away result of header
+          ;; stock result of header
           (let ((fields (sqlite3--read-csv-line)))
             (delete-region (point-min) (point))
             (plist-put reader :fields fields))
           (plist-put reader :position 0)
           (setq pos 0))
-        ;; read and 
+        ;; read and delete it.
         (setq row (sqlite3--read-csv-line))
         (delete-region (point-min) (point))
         (plist-put reader :position (1+ pos))
@@ -2144,7 +2145,7 @@ Good: SELECT * FROM table1\n
 (defun sqlite3-reader-seek (reader pos)
   (let ((res (plist-get reader :results)))
     (cond 
-     ((< (length res) (1+ pos))
+     ((< (length res) pos)
       (while (and (sqlite3-reader-read reader)
                   ;; read to specified position
                   (< (plist-get reader :position) pos))))
@@ -2152,25 +2153,29 @@ Good: SELECT * FROM table1\n
       (plist-put reader :position pos)))
     (plist-get reader :position)))
 
-;;TODO confising specification
-(defun sqlite3-reader-todo (reader &optional pos)
-  (setq pos
-        (cond 
+(defun sqlite3-reader-peek (reader &optional pos)
+  "Utility to read a row at POS or READER current position.
+"
+  (let* ((prev (plist-get reader :position))
+         (pos
+          (cond 
+           ((null pos)
+            (plist-get reader :position))
+           ((sqlite3-reader-open-p reader)
+            ;; set new position to actual position
+            (sqlite3-reader-seek reader pos))
+           (t pos))))
+    (unwind-protect
+        (cond
          ((null pos)
-          (plist-get reader :position))
-         ((sqlite3-reader-open-p reader)
-          ;; set new position to actual position
-          (sqlite3-reader-seek reader pos))
-         (t pos)))
-  (cond
-   ((null pos)
-    ;; reader has not yet opened.
-    (sqlite3-reader-read reader))
-   (t
-    (let* ((res (plist-get reader :results))
-           (max (1- (length res)))
-           (tidx (- max pos)))
-      (nth tidx res)))))
+          ;; reader has not yet opened.
+          (sqlite3-reader-read reader))
+         (t
+          (let* ((res (plist-get reader :results))
+                 (max (1- (length res)))
+                 (tidx (- max pos)))
+            (nth tidx res))))
+      (sqlite3-reader-seek reader prev))))
 
 ;;;
 ;;; TODO
