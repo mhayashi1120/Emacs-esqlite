@@ -271,8 +271,8 @@ if you want."
 (defun sqlite3-mode-open-schema-mode (&optional force)
   "Show schema view of current buffer file."
   (interactive)
-  (sqlite3-mode--check-stream)
   (sqlite3-schema-mode)
+  (sqlite3-mode--check-stream)
   (cond
    (force
     (sqlite3-schema-mode-draw-view))
@@ -453,6 +453,10 @@ if you want."
   (let ((stream (sqlite3-mode-ref :stream)))
     (unless (and stream
                  (eq (process-status stream) 'run))
+      ;;TODO
+      (logger-info "Opening stream for %s" buffer-file-name)
+      (when stream
+        (delete-process stream))
       (setq stream (sqlite3-stream-open buffer-file-name))
       (sqlite3-mode-set :stream stream))))
 
@@ -2071,10 +2075,10 @@ if you want."
   (sqlite3--with-process proc
     (goto-char (point-max))
     (insert event)
-    (unless sqlite3-stream--error
+    (unless (process-get proc 'sqlite3-syntax-error)
       ;; check only first time filter received data.
-      (setq sqlite3-stream--error
-            (or (sqlite3-stream--parse-error) t)))
+      (process-put proc 'sqlite3-syntax-error
+                   (or (sqlite3-stream--parse-error) t)))
     (goto-char (point-min))
     (when (functionp sqlite3-stream--filter-function)
       (funcall sqlite3-stream--filter-function proc))))
@@ -2087,6 +2091,7 @@ if you want."
 (defvar sqlite3-stream--filter-function nil
   "This function called while receiving data from sqlite3 command.")
 
+;;TODO check implementation is correct.
 (defvar sqlite3-stream--csv-accumulation nil
   "Only synchronous use.")
 
@@ -2142,6 +2147,9 @@ if you want."
       (process-put stream 'sqlite3-null-value nil)))
   sqlite3-stream--csv-accumulation)
 
+(defun sqlite3-stream-set-option (stream command)
+  (sqlite3-stream--send-command stream command))
+
 (defun sqlite3-stream--send-command (stream command)
   "Send COMMAND to STREAM with omitting check the COMMAND error."
   (sqlite3-stream--wait stream)
@@ -2156,9 +2164,6 @@ if you want."
     (with-current-buffer buf
       (goto-char (point-max))
       (buffer-substring (point-min) (line-end-position 0)))))
-
-(defvar sqlite3-stream--error nil)
-(make-variable-buffer-local 'sqlite3-stream--error)
 
 (defun sqlite3-stream-execute-sql (stream sql)
   "Send SQL to sqlite3 STREAM. (currently STREAM is a process object)
@@ -2180,7 +2185,7 @@ Good: SELECT * FROM table1\n
     (with-current-buffer buf
       ;; clear all text contains prompt.
       (erase-buffer)
-      (setq sqlite3-stream--error nil)
+      (process-put proc 'sqlite3-syntax-error nil)
       (process-send-string proc sql)
       (cond
        ((not (string-match ";[ \t\n]*\\'" sql))
@@ -2190,10 +2195,10 @@ Good: SELECT * FROM table1\n
       ;; only check syntax error.
       (while (and (eq (process-status proc) 'run)
                   (not (sqlite3-prompt-p))
-                  (null sqlite3-stream--error))
+                  (null (process-get proc 'sqlite3-syntax-error)))
         (sqlite3-sleep 0.1))
-      (when (stringp sqlite3-stream--error)
-        (error "%s" sqlite3-stream--error))
+      (when (stringp (process-get proc 'sqlite3-syntax-error))
+        (error "%s" (process-get proc 'sqlite3-syntax-error)))
       t)))
 
 (defun sqlite3-stream--wait (proc)
