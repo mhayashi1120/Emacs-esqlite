@@ -539,6 +539,9 @@ if you want."
     (define-key map "j" 'sqlite3-table-mode-next-row)
     (define-key map "S" 'sqlite3-mode-open-schema-mode)
 
+    ;;TODO
+    ;; (define-key map "!" 'sqlite3-mode-do-sql)
+    
     ;; TODO keybinding `#' `%'
     (define-key map "#" (make-sparse-keymap))
     (define-key map "#s" 'sqlite3-table-mode-easy-sort)
@@ -755,7 +758,9 @@ if you want."
   (sqlite3-table-mode-set nil :source :orders)
   (sqlite3-table-mode-redraw-page))
 
+;;TODO immitate excel autofill
 (defun sqlite3-table-mode-easy-filter ()
+  ""
   (interactive)
   (let* ((cell (get-text-property (point) 'sqlite3-mode-cell))
          (column (plist-get cell :column)))
@@ -764,8 +769,9 @@ if you want."
     (let* ((source (copy-sequence (sqlite3-table-mode-ref :source)))
            (where (plist-get source :where))
            (name (plist-get column :name))
-           ;;TODO show current where
-           (str (read-string (format "WHERE %s " name)))
+           ;;TODO show current all where
+           ;;TODO default value is cell value
+           (str (read-string (format "%s " name) (format " = ")))
            (appended (format "%s %s" name str))
            (new-where (if where
                           (concat where " AND " appended)
@@ -795,7 +801,7 @@ if you want."
     (while (not done)
       (let ((c (read-char (format "isearch: %s" text))))
         (setq text (concat text (char-to-string c)))
-        ;; TODO quote text % _
+        ;; TODO quote text % _ and sqlite3-escape
         (let* ((like (format "%%%s%%" text))
                (src (copy-sequence source))
                (filters (cons 'or
@@ -807,6 +813,9 @@ if you want."
                      :where (sqlite3-table-mode--compile-filters filters))
           (sqlite3-table-mode--draw-page src))))))
 
+(defun sqlite3-table-mode-revert (&rest dummy)
+  (sqlite3-table-mode-redraw-page))
+
 (defun sqlite3-table-mode--new-context ()
   (unless sqlite3-table-mode--context
     (setq sqlite3-table-mode--context
@@ -817,6 +826,7 @@ if you want."
            :view (list :max-page nil
                        :page-row sqlite3-mode--default-page-rows
                        :columns nil)
+           ;;TODO source? name is not properly..
            :source (list :orders nil :where nil :page 0)))))
 
 (defun sqlite3-table-mode-ref (&rest keys)
@@ -873,6 +883,13 @@ if you want."
 (defun sqlite3-table-mode-current-value ()
   (let ((cell (get-text-property (point) 'sqlite3-mode-cell)))
     (sqlite3-table-mode--cell-value cell)))
+
+(defun sqlite3-table-mode-with-show-buffer (buffer proc)
+  (save-window-excursion
+    (pop-to-buffer buffer nil t)
+    (let ((win (get-buffer-window buffer)))
+      (fit-window-to-buffer win))
+    (funcall proc)))
 
 (defun sqlite3-table-mode-popup-contents ()
   (save-match-data
@@ -1233,47 +1250,49 @@ if you want."
 (defun sqlite3-table-mode--delayed-draw-header ()
   ;; In the `post-command-hook', `window-hscroll' function still return
   ;; previous value. Although after calling `scroll-right' return correct value.
-  (run-with-timer 0.1 nil 'sqlite3-table-mode--draw-header))
+  (let ((buffer (current-buffer)))
+    (run-with-timer 0.1 nil 'sqlite3-table-mode--draw-header buffer)))
 
-(defun sqlite3-table-mode--draw-header ()
+(defun sqlite3-table-mode--draw-header (buffer)
   (with-local-quit
     (cancel-function-timers 'sqlite3-table-mode--draw-header)
-    (let* ((disp-headers
-            (loop with hscroll = (window-hscroll)
-                  ;;  set t after first displaying column in window
-                  with flag
-                  for col in (sqlite3-table-mode-ref :view :columns)
-                  ;; add `sqlite3-mode-header-column-separator' width
-                  sum (1+ (plist-get col :width)) into right
-                  if (< hscroll right)
-                  collect (let ((name (plist-get col :name))
-                                (wid (plist-get col :width)))
-                            (unless flag
-                              (setq wid (- right hscroll 1)))
-                            (setq flag t)
-                            (cond
-                             ((< wid sqlite3-mode--cell-min-width)
-                              ;; Beginning of line header may have too short
-                              ;;  length of name.
-                              (make-string wid ?\s))
-                             (t
-                              (propertize
-                               (sqlite3-table-mode--truncate-text
-                                wid name)
-                               'face 'sqlite3-mode-column-face))))))
-           (filler (make-string (frame-width) ?\s))
-           (tail (sqlite3-mode--propertize-background-header filler))
-           (separator sqlite3-mode-header-column-separator)
-           (left (car (window-inside-edges))))
-      (setq header-line-format
-            (and disp-headers
-                 (list
-                  ;;FIXME after change examples 
-                  ;; `scroll-bar-mode' or `linum-mode'.
-                  (make-list left separator)
-                  (mapconcat 'identity disp-headers separator)
-                  tail)))
-      (force-mode-line-update))))
+    (with-current-buffer buffer
+      (let* ((disp-headers
+              (loop with hscroll = (window-hscroll)
+                    ;;  set t after first displaying column in window
+                    with flag
+                    for col in (sqlite3-table-mode-ref :view :columns)
+                    ;; add `sqlite3-mode-header-column-separator' width
+                    sum (1+ (plist-get col :width)) into right
+                    if (< hscroll right)
+                    collect (let ((name (plist-get col :name))
+                                  (wid (plist-get col :width)))
+                              (unless flag
+                                (setq wid (- right hscroll 1)))
+                              (setq flag t)
+                              (cond
+                               ((< wid sqlite3-mode--cell-min-width)
+                                ;; Beginning of line header may have too short
+                                ;;  length of name.
+                                (make-string wid ?\s))
+                               (t
+                                (propertize
+                                 (sqlite3-table-mode--truncate-text
+                                  wid name)
+                                 'face 'sqlite3-mode-column-face))))))
+             (filler (make-string (frame-width) ?\s))
+             (tail (sqlite3-mode--propertize-background-header filler))
+             (separator sqlite3-mode-header-column-separator)
+             (left (car (window-inside-edges))))
+        (setq header-line-format
+              (and disp-headers
+                   (list
+                    ;;FIXME after change examples 
+                    ;; `scroll-bar-mode' or `linum-mode'.
+                    (make-list left separator)
+                    (mapconcat 'identity disp-headers separator)
+                    tail)))
+        (force-mode-line-update)))))
 
 (defun sqlite3-table-mode--insert-row (row)
   ;; (car row) is ROWID
@@ -1542,7 +1561,7 @@ if you want."
 (defun sqlite3-table-mode--compile-order (order)
   (let ((column (car order))
         (todo (cadr order)))
-    (concat (plist-get column :name) " " todo)))
+    (concat (sqlite3-format-object (plist-get column :name)) " " todo)))
 
 ;; FILTERS ::= (AND FILTER ...) | (OR FILTER ...)
 
@@ -1582,8 +1601,9 @@ if you want."
    (mapconcat
     'sqlite3-table-mode--compile-filter
     (cdr filters)
-    (cond ((eq (car filters) 'or) " OR ")
-          ((eq (car filters) 'and) " AND ")))
+    (cond
+     ((eq (car filters) 'or)  " OR ")
+     ((eq (car filters) 'and) " AND ")))
    ")"))
 
 (defun sqlite3-table-mode--compile-filter (filter)
@@ -1593,16 +1613,26 @@ if you want."
    ((and (listp filter) (= (length filter) 2))
     (let ((column (car filter))
           (operator (cadr filter)))
-      (concat "(" (plist-get column :name) " " operator ")")))
+      (concat "("
+              (sqlite3-format-object (plist-get column :name))
+              " "
+              operator
+              ")")))
    ((and (listp filter) (> (length filter) 2))
     (let ((column (car filter))
           (operator (cadr filter))
           (exps (cddr filter)))
-      (concat "(" (plist-get column :name) " " operator " "
+      (concat "("
+              (sqlite3-format-object (plist-get column :name))
+              " " operator " "
               (mapconcat 'sqlite3-format-value exps " ")
               ")")))
    (t
     (error "Invalid filter %s" filter))))
+
+;;
+;; Automated DML
+;;
 
 (defun sqlite3-table-mode--update-sql (row)
   (format "UPDATE %s SET %s WHERE %s = %s;"
@@ -1610,7 +1640,7 @@ if you want."
           (mapconcat
            (lambda (x)
              (format "%s = %s"
-                     (car x)
+                     (sqlite3-format-object (car x))
                      (sqlite3-format-value (cdr x))))
            (loop for (name source edit) in (cdr row)
                  if edit
@@ -1635,9 +1665,6 @@ if you want."
   (format "DELETE FROM %s WHERE %s = %s;"
           (sqlite3-table-mode-ref :table-name)
           (sqlite3-table-mode-ref :table-rowid) rowid))
-
-(defun sqlite3-table-mode-revert (&rest dummy)
-  (sqlite3-table-mode-redraw-page))
 
 ;;;
 ;;; sqlite3-schema-mode
@@ -1718,7 +1745,7 @@ if you want."
                    ((memq type '(table view))
                     (sqlite3-schema--draw-table item))
                    ;; TODO
-                   (t (error "Not supported %s" type)))))
+                   (t (error "Not a supported type `%s'" type)))))
           (plist-put item :child ov))
         (sqlite3-schema-mode--set-open region)))
       (set-buffer-modified-p modifiedp))))
@@ -1746,7 +1773,7 @@ if you want."
                      (format " AND name = '%s'" (sqlite3-escape name)))
              t))
            (t
-            (error "Not supported type %s" type))))
+            (error "Not a supported type `%s'" type))))
          (ddl (caar results)))
     (unless (stringp ddl)
       (error "No definitions here"))
@@ -2021,13 +2048,23 @@ if you want."
 ;;;
 
 (defmacro sqlite3--with-process (proc &rest form)
-  (declare (indent 1))
+  (declare (indent 1) (debug t))
   `(let ((buf (process-buffer proc)))
      (when (buffer-live-p buf)
        (with-current-buffer buf
          ,@form))))
 
 (defvar sqlite3-stream-coding-system 'utf-8)
+
+(defun sqlite3-stream-p (obj)
+  (and (processp obj)
+       (process-get obj 'sqlite3-stream-process-p)))
+
+(defun sqlite3-stream-alive-p (stream)
+  (eq (process-status stream) 'run))
+
+(defun sqlite3-stream-filename (stream)
+  (process-get stream 'sqlite3-stream-filename))
 
 (defun sqlite3-stream-open (file)
   (unless (executable-find sqlite3-program)
@@ -2091,20 +2128,12 @@ if you want."
 (defvar sqlite3-stream--filter-function nil
   "This function called while receiving data from sqlite3 command.")
 
-;;TODO check implementation is correct.
-(defvar sqlite3-stream--csv-accumulation nil
-  "Only synchronous use.")
-
 (defun sqlite3-stream--csv-filter (proc)
-  (let* ((raw (sqlite3--read-csv-with-deletion))
-         (null (process-get proc 'sqlite3-null-value))
-         (data (loop for row in raw
-                     collect (loop for datum in row
-                                   collect (if (equal datum null)
-                                               :null
-                                             datum)))))
-    (setq sqlite3-stream--csv-accumulation
-          (append sqlite3-stream--csv-accumulation data))))
+  (let* ((null (process-get proc 'sqlite3-null-value))
+         (data (sqlite3--read-csv-with-deletion null))
+         (accum (process-get stream 'sqlite3-accumulation)))
+    (process-put stream 'sqlite3-accumulation
+                 (append accum data))))
 
 (defun sqlite3-temp-null (query)
   (loop with key = (format "%s:%s" (current-time) query)
@@ -2121,10 +2150,13 @@ if you want."
           (substring b64 0 19))))
 
 (defun sqlite3-stream-execute-query (stream query)
-  "Pass STREAM and QUERY to `sqlite3-stream-execute-sql'
+  "Get QUERY result from STREAM
+
+TODO see `sqlite3-stream-execute-sql'.
 "
   (let ((nullvalue (sqlite3-temp-null query)))
     ;; handling NULL text
+    ;; Use different null text each time when executing query.
     (sqlite3-stream--send-command
      stream (format ".nullvalue '%s'" nullvalue))
     (process-put stream 'sqlite3-null-value nullvalue)
@@ -2136,16 +2168,16 @@ if you want."
           (unwind-protect
               (progn
                 ;; reset accumulate variable
-                (setq sqlite3-stream--csv-accumulation nil)
+                (process-put stream 'sqlite3-accumulation nil)
                 (sqlite3-stream-execute-sql stream query)
                 ;; wait until prompt is displayed.
                 ;; filter function handling csv data.
                 (sqlite3-stream--wait stream))
             (setq sqlite3-stream--filter-function nil)))
-      ;; reset nullvalue
+      ;; reset nullvalue (TODO no need?)
       (sqlite3-stream--send-command stream ".nullvalue ''")
       (process-put stream 'sqlite3-null-value nil)))
-  sqlite3-stream--csv-accumulation)
+  (process-get stream 'sqlite3-accumulation))
 
 (defun sqlite3-stream-set-option (stream command)
   (sqlite3-stream--send-command stream command))
@@ -2158,7 +2190,7 @@ if you want."
       ;; clear all text contains prompt.
       (erase-buffer))
     (process-send-string stream command)
-    (unless (string-match "\n$" command)
+    (unless (string-match "\n\\'" command)
       (process-send-string stream "\n"))
     (sqlite3-stream--wait stream)
     (with-current-buffer buf
@@ -2206,7 +2238,56 @@ Good: SELECT * FROM table1\n
     (with-current-buffer buf
       (while (and (eq (process-status proc) 'run)
                   (not (sqlite3-prompt-p)))
-        (sqlite3-sleep 0.1)))))
+        (sqlite3-sleep 0.01)))))
+
+;;;
+;;; Sqlite3 onetime stream
+;;;
+
+(defun sqlite3-onetime-stream (file query filter)
+  "Execute QUERY in sqlite3 FILE.
+FILTER called with one arg that may parsed csv or nil which indicate EOF.
+"
+  (let* ((buf (sqlite3-stream--create-buffer))
+         (nullvalue (sqlite3-temp-null query))
+         (commands (list (format ".nullvalue '%s'" nullvalue)))
+         (init (sqlite3--create-init-file commands))
+         (proc (start-process
+                "Sqlite3 Stream" buf
+                sqlite3-program
+                "-header"
+                "-init" init
+                "-csv" file query)))
+    (process-put proc 'sqlite3-filter filter)
+    (process-put proc 'sqlite3-null-value nullvalue)
+    (set-process-filter proc 'sqlite3-onetime-stream--filter)
+    (set-process-sentinel proc 'sqlite3-onetime-stream--sentinel)
+    proc))
+              
+(defun sqlite3-onetime-stream--filter (proc event)
+  ;;TODO
+  ;; (unless (process-get proc 'sqlite3-syntax-error)
+  ;;   ;; check only first time filter received data.
+  ;;   (process-put proc 'sqlite3-syntax-error
+  ;;                (or (sqlite3-stream--parse-error) t)))
+  ;; (goto-char (point-min))
+  (sqlite3--with-process proc
+    (goto-char (point-max))
+    (insert event)
+    (let ((filter (process-get proc 'sqlite3-filter)))
+      (goto-char (point-min))
+      ;;TODO refactor `sqlite3-stream--csv-filter'
+      (let* ((null (process-get proc 'sqlite3-null-value))
+             (data (sqlite3--read-csv-with-deletion null)))
+        (dolist (row data)
+          (funcall filter row))))))
+
+(defun sqlite3-onetime-stream--sentinel (proc event)
+  (sqlite3--with-process proc
+    ;;TODO consider other status
+    (unless (eq (process-status proc) 'run)
+      (let ((filter (process-get proc 'sqlite3-filter)))
+        (funcall filter nil)))))
 
 ;;;
 ;;; Sqlite3 lazy reader
@@ -2222,7 +2303,7 @@ Good: SELECT * FROM table1\n
     ;; send synchrounous variables.
     (setq sqlite3-stream--filter-function nil)
     ;; reset accumulate variable
-    (setq sqlite3-stream--csv-accumulation nil)
+    (process-put stream 'sqlite3-accumulation nil)
     (sqlite3-stream-execute-sql stream query)
     (list :stream stream :results nil
           :position nil :fields nil)))
@@ -2342,9 +2423,11 @@ Good: SELECT * FROM table1\n
       (setq sqlite3--init-file
             (sqlite3--create-init-file))))
 
-(defun sqlite3--create-init-file ()
+(defun sqlite3--create-init-file (&optional commands)
   (let ((file (make-temp-file "emacs-sqlite3-")))
     (with-temp-buffer
+      (dolist (com commands)
+        (insert com "\n"))
       (write-region (point-min) (point-max) file nil 'no-msg))
     file))
 
@@ -2361,15 +2444,20 @@ Good: SELECT * FROM table1\n
 (defun sqlite3-looking-at-prompt ()
   (looking-at "^\\( *\\.\\.\\.> \\)*sqlite> \\'"))
 
-(defun sqlite3--read-csv-with-deletion ()
+(defun sqlite3--read-csv-with-deletion (null)
   "Read csv data from current point. Delete csv data if read was succeeded."
   (let (pcsv--eobp res)
     (condition-case nil
         (while (not (eobp))
           (let ((start (point))
-                (l (sqlite3--read-csv-line)))
+                (row (sqlite3--read-csv-line)))
             (delete-region start (point))
-            (setq res (cons l res))))
+            (setq res
+                  (cons (loop for datum in row
+                              collect (if (equal datum null)
+                                          :null
+                                        datum))
+                        res))))
       ;; output is proceeding from process
       ;; finish the reading
       (invalid-read-syntax nil))
@@ -2384,6 +2472,10 @@ Good: SELECT * FROM table1\n
       (signal 'invalid-read-syntax nil))
     line))
 
+(defun sqlite3-format-object (object)
+  ;;TODO some escape?
+  (format "[%s]" object))
+
 (defun sqlite3-format-value (object)
   (cond
    ((stringp object)
@@ -2394,8 +2486,27 @@ Good: SELECT * FROM table1\n
    ((numberp object)
     (prin1-to-string object))
    ((eq object :null) "null")
+   ((listp object)
+    (concat
+     "("
+     (mapconcat 'sqlite3-format-value object ", ")
+     ")"))
    (t
     (error "Not a supported type %s" object))))
+
+(defun sqlite3-quote-maybe (text)
+  (case (sqlite3-guess-type text)
+    (null "NULL")
+    (number (sqlite3-format-value (string-to-number text)))
+    (text (sqlite3-format-value text))
+    (error "Not supported `%s'" text)))
+
+(defun sqlite3-guess-type (text)
+  (cond
+   ((not text) 'null)
+   ;;TODO 1e2 
+   ((string-match "\\`[0-9.]+\\'" text) 'number)
+   (t 'text)))
 
 (defun sqlite3-views (stream)
   (sqlite3-objects stream "view"))
@@ -2498,9 +2609,54 @@ WHERE and ORDER is string that is passed through to sql query.
              (plist-put dest name val)))
   dest)
 
-(defun sqlite3-escape (string)
-  ;;TODO other value
-  (replace-regexp-in-string "'" "''" string))
+;;;###autoload
+(defun sqlite3-escape (string &optional quote-char)
+  "Escape STRING as a sqlite3 string object context.
+Optional QUOTE-CHAR arg indicate quote-char
+
+e.g.
+\(let ((user-input \"a\\\"'b\"))
+  (format \"SELECT * FROM T WHERE a = '%s'\" (sqlite3-escape user-input ?\\')))
+  => \"SELECT * FROM T WHERE a = 'a\\\"''b'\"
+
+\(let ((user-input \"a\\\"'b\"))
+  (format \"SELECT * FROM T WHERE a = \\\"%s\\\"\" (sqlite3-escape user-input ?\\\")))
+  => \"SELECT * FROM T WHERE a = \\\"a\\\"\\\"'b\\\"\"
+"
+  (setq quote-char (or quote-char ?\'))
+  (sqlite3--replace
+   string
+   `((,quote-char . ,(format "%c%c" quote-char quote-char)))))
+
+;;TODO sqlite3 -header hogehoge.db "select 'a_b' like 'a\_b' escape '\\'"
+;; sqlite3 ~/tmp/hogehoge.db "select 'a_b' like 'ag_b' escape 'g'"
+
+;; escape `LIKE' query from user input.
+(defun sqlite3-escape-like (query escape-char)
+  ;;TODO make default value as backslash?
+  (sqlite3--replace
+   query
+   `((?\% . ,(format "%c%%" escape-char))
+     (?\_ . ,(format "%c_"  escape-char))
+     (,escape-char . ,(format "%c%c"  escape-char escape-char)))))
+
+(defun sqlite3--replace (string init-table)
+  (loop with table = init-table
+        with res
+        for c across string
+        concat (let ((pair (assq c table)))
+                 (cond
+                  ((not pair)
+                   (setq table init-table)
+                   (char-to-string c))
+                  ((stringp (cdr pair))
+                   (setq table init-table)
+                   (cdr pair))
+                  ((consp (cdr pair))
+                   (setq table (cdr pair))
+                   nil)
+                  (t
+                   (error "Not supported yet"))))))
 
 (defun sqlite3--filter (filter list)
   (loop for o in list
