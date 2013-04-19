@@ -541,7 +541,7 @@ if you want."
 
     ;;TODO
     ;; (define-key map "!" 'sqlite3-mode-do-sql)
-    
+
     ;; TODO keybinding `#' `%'
     (define-key map "#" (make-sparse-keymap))
     (define-key map "#s" 'sqlite3-table-mode-easy-sort)
@@ -650,7 +650,7 @@ if you want."
   (when (plusp (recursion-depth))
     (error "%s"
            (substitute-command-keys
-            (concat 
+            (concat
              "Other recursive edit is working. "
              "Type \\[abort-recursive-edit] to quit previous recursive edit"))))
   (sqlite3-table-mode--call/edit-cell
@@ -809,7 +809,7 @@ if you want."
                                (lambda (col)
                                  (list col "like" like))
                                columns))))
-          (plist-put src 
+          (plist-put src
                      :where (sqlite3-table-mode--compile-filters filters))
           (sqlite3-table-mode--draw-page src))))))
 
@@ -1287,7 +1287,7 @@ if you want."
         (setq header-line-format
               (and disp-headers
                    (list
-                    ;;FIXME after change examples 
+                    ;;FIXME after change examples
                     ;; `scroll-bar-mode' or `linum-mode'.
                     (make-list left separator)
                     (mapconcat 'identity disp-headers separator)
@@ -1690,7 +1690,7 @@ if you want."
     (define-key map "j" 'sqlite3-schema-mode-next-line)
     (define-key map "p" 'sqlite3-schema-mode-previous-line)
     (define-key map "n" 'sqlite3-schema-mode-next-line)
-    
+
     (setq sqlite3-schema-mode-map map)))
 
 (define-derived-mode sqlite3-schema-mode sqlite3-mode "Sqlite3 Schema"
@@ -1766,7 +1766,7 @@ if you want."
          (results
           (cond
            ((memq type '(table view index trigger))
-            (sqlite3-mode-query 
+            (sqlite3-mode-query
              (concat "SELECT sql "
                      " FROM sqlite_master"
                      (format " WHERE type = '%s'" type)
@@ -1827,7 +1827,7 @@ if you want."
             do (let ((start (point)))
                  (insert (format "%s%s\n"
                                  sqlite3-schema-mode--close-icon
-                                 (propertize name 
+                                 (propertize name
                                              'face 'sqlite3-mode-table-face)))
                  (put-text-property
                   start (point)
@@ -1908,7 +1908,7 @@ if you want."
              (width-def (sqlite3-mode--calculate-width data))
              (hdrs (loop for h in headers
                          for w in width-def
-                         collect (let ((name 
+                         collect (let ((name
                                         (truncate-string-to-width h w nil ?\s)))
                                    (propertize
                                     name
@@ -2047,12 +2047,37 @@ if you want."
 ;;; Sqlite3 stream
 ;;;
 
+(defun sqlite3-start-process (buffer &rest args)
+  (let ((process-environment (copy-sequence process-environment)))
+    ;; currently no meanings of this
+    ;; in the future release may support i18n.
+    (setenv "LANG" "C")
+    (apply 'start-process "Sqlite3 Stream" buffer
+           sqlite3-program args)))
+
 (defmacro sqlite3--with-process (proc &rest form)
   (declare (indent 1) (debug t))
   `(let ((buf (process-buffer proc)))
      (when (buffer-live-p buf)
        (with-current-buffer buf
          ,@form))))
+
+(defmacro sqlite3--with-parse (proc event &rest form)
+  (declare (indent 2) (debug t))
+  `(sqlite3--with-process proc
+     (save-excursion
+       (goto-char (point-max))
+       (insert event)
+       (goto-char (point-min))
+       (unless (process-get proc 'sqlite3-syntax-error)
+         ;; check only first time filter received data.
+
+         ;;FIXME this error output to stderr. Separate stderr to other file??
+         ;;     Altough rarely happens, worrying about confusing stdout/stderr
+         (let ((errmsg (and (looking-at "^Error: \\(.*\\)")
+                            (format "Sqlite3 Error: %s" (match-string 1)))))
+           (process-put proc 'sqlite3-syntax-error (or errmsg t))))
+       ,@form)))
 
 (defvar sqlite3-stream-coding-system 'utf-8)
 
@@ -2070,12 +2095,11 @@ if you want."
   (unless (executable-find sqlite3-program)
     (error "%s not found" sqlite3-program))
   (let* ((buf (sqlite3-stream--create-buffer))
-         (proc (start-process "Sqlite3 Stream" buf
-                              sqlite3-program
-                              "-header"
-                              "-interactive"
-                              "-init" (sqlite3--init-file)
-                              "-csv" file)))
+         (proc (sqlite3-start-process
+                buf "-header"
+                "-interactive"
+                "-init" (sqlite3--init-file)
+                "-csv" file)))
     (set-process-coding-system
      proc sqlite3-stream-coding-system sqlite3-stream-coding-system)
     (process-put proc 'sqlite3-stream-process-p t)
@@ -2100,23 +2124,8 @@ if you want."
 (defun sqlite3-stream--create-buffer ()
   (generate-new-buffer " *Sqlite3 work* "))
 
-(defun sqlite3-stream--parse-error ()
-  (save-excursion
-    (goto-char (point-min))
-    ;;FIXME this error output to stderr. Separate stderr to other file??
-    ;;     Altough rarely happens, worrying about confusing stdout/stderr 
-    (and (looking-at "^Error: \\(.*\\)")
-         (format "Sqlite3 Error: %s" (match-string 1)))))
-
 (defun sqlite3-stream--filter (proc event)
-  (sqlite3--with-process proc
-    (goto-char (point-max))
-    (insert event)
-    (unless (process-get proc 'sqlite3-syntax-error)
-      ;; check only first time filter received data.
-      (process-put proc 'sqlite3-syntax-error
-                   (or (sqlite3-stream--parse-error) t)))
-    (goto-char (point-min))
+  (sqlite3--with-parse proc event
     (when (functionp sqlite3-stream--filter-function)
       (funcall sqlite3-stream--filter-function proc))))
 
@@ -2199,9 +2208,9 @@ TODO see `sqlite3-stream-execute-sql'.
 
 (defun sqlite3-stream-execute-sql (stream sql)
   "Send SQL to sqlite3 STREAM. (currently STREAM is a process object)
-This function check syntax error of QUERY.
+This function check syntax error of SQL.
 
-SQL is a sql statement that can have not statement end (`;').
+SQL is a sql statement that can have no statement end (`;').
  Do Not have multiple statements.
 
 Examples:
@@ -2228,7 +2237,7 @@ Good: SELECT * FROM table1\n
       (while (and (eq (process-status proc) 'run)
                   (not (sqlite3-prompt-p))
                   (null (process-get proc 'sqlite3-syntax-error)))
-        (sqlite3-sleep 0.1))
+        (sqlite3-sleep))
       (when (stringp (process-get proc 'sqlite3-syntax-error))
         (error "%s" (process-get proc 'sqlite3-syntax-error)))
       t)))
@@ -2238,7 +2247,7 @@ Good: SELECT * FROM table1\n
     (with-current-buffer buf
       (while (and (eq (process-status proc) 'run)
                   (not (sqlite3-prompt-p)))
-        (sqlite3-sleep 0.01)))))
+        (sqlite3-sleep)))))
 
 ;;;
 ;;; Sqlite3 onetime stream
@@ -2246,48 +2255,40 @@ Good: SELECT * FROM table1\n
 
 (defun sqlite3-onetime-stream (file query filter)
   "Execute QUERY in sqlite3 FILE.
-FILTER called with one arg that may parsed csv or nil which indicate EOF.
+FILTER called with one arg that is parsed csv line or
+`nil' which indicate EOF.
 "
   (let* ((buf (sqlite3-stream--create-buffer))
          (nullvalue (sqlite3-temp-null query))
-         (commands (list (format ".nullvalue '%s'" nullvalue)))
-         (init (sqlite3--create-init-file commands))
-         (proc (start-process
-                "Sqlite3 Stream" buf
-                sqlite3-program
-                "-header"
+         (init (sqlite3--create-init-file))
+         (proc (sqlite3-start-process
+                buf "-header"
                 "-init" init
-                "-csv" file query)))
+                "-nullvalue" nullvalue
+                "-batch"
+                "-csv" file
+                query)))
     (process-put proc 'sqlite3-filter filter)
     (process-put proc 'sqlite3-null-value nullvalue)
     (set-process-filter proc 'sqlite3-onetime-stream--filter)
     (set-process-sentinel proc 'sqlite3-onetime-stream--sentinel)
     proc))
-              
+
 (defun sqlite3-onetime-stream--filter (proc event)
-  ;;TODO
-  ;; (unless (process-get proc 'sqlite3-syntax-error)
-  ;;   ;; check only first time filter received data.
-  ;;   (process-put proc 'sqlite3-syntax-error
-  ;;                (or (sqlite3-stream--parse-error) t)))
-  ;; (goto-char (point-min))
-  (sqlite3--with-process proc
-    (goto-char (point-max))
-    (insert event)
-    (let ((filter (process-get proc 'sqlite3-filter)))
-      (goto-char (point-min))
-      ;;TODO refactor `sqlite3-stream--csv-filter'
-      (let* ((null (process-get proc 'sqlite3-null-value))
-             (data (sqlite3--read-csv-with-deletion null)))
-        (dolist (row data)
-          (funcall filter row))))))
+  ;;TODO how to handle syntax error
+  (sqlite3--with-parse proc event
+    (let* ((filter (process-get proc 'sqlite3-filter))
+           (null (process-get proc 'sqlite3-null-value))
+           (data (sqlite3--read-csv-with-deletion null)))
+      (dolist (row data)
+        (funcall filter row)))))
 
 (defun sqlite3-onetime-stream--sentinel (proc event)
   (sqlite3--with-process proc
-    ;;TODO consider other status
     (unless (eq (process-status proc) 'run)
       (let ((filter (process-get proc 'sqlite3-filter)))
-        (funcall filter nil)))))
+        (funcall filter nil))
+      (kill-buffer (current-buffer)))))
 
 ;;;
 ;;; Sqlite3 lazy reader
@@ -2323,7 +2324,7 @@ FILTER called with one arg that may parsed csv or nil which indicate EOF.
         row)
     (unless (eq (process-status stream) 'run)
       (error "Stream is closed"))
-    (if (or 
+    (if (or
          ;; reader has not stepped yet.
          (null pos)
          ;; end of current reader
@@ -2367,7 +2368,7 @@ FILTER called with one arg that may parsed csv or nil which indicate EOF.
 
 (defun sqlite3-reader-seek (reader pos)
   (let ((res (plist-get reader :results)))
-    (cond 
+    (cond
      ((< (length res) pos)
       (while (and (sqlite3-reader-read reader)
                   ;; read to specified position
@@ -2381,7 +2382,7 @@ FILTER called with one arg that may parsed csv or nil which indicate EOF.
 "
   (let* ((prev (plist-get reader :position))
          (pos
-          (cond 
+          (cond
            ((null pos)
             (plist-get reader :position))
            ((sqlite3-reader-open-p reader)
@@ -2402,15 +2403,15 @@ FILTER called with one arg that may parsed csv or nil which indicate EOF.
 
 ;;;
 ;;; TODO
-;;; 
+;;;
 
-(defun sqlite3-sleep (seconds)
+(defun sqlite3-sleep ()
   ;; Other code affect to buffer while `sleep-for'.
   ;; TODO timer? filter? I can't get clue.
   (save-excursion
     ;; Achieve like a asynchronously behavior (ex: draw mode line)
     (redisplay)
-    (sleep-for seconds)))
+    (sleep-for 0.01)))
 
 ;;;
 ;;; Utilities to handle any sqlite3 item.
@@ -2504,7 +2505,7 @@ FILTER called with one arg that may parsed csv or nil which indicate EOF.
 (defun sqlite3-guess-type (text)
   (cond
    ((not text) 'null)
-   ;;TODO 1e2 
+   ;;TODO 1.e2
    ((string-match "\\`[0-9.]+\\'" text) 'number)
    (t 'text)))
 
