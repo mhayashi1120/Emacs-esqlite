@@ -25,6 +25,24 @@
           )
       (sqlite3-stream-close stream))))
 
+
+(defun sqlite3-test-wait-exit (process)
+  (while (eq (process-status process) 'run) (sleep-for 0.01)))
+
+(ert-deftest sqlite3-normal-onetime-stream-0001 ()
+  :tags '(sqlite3)
+  (let* ((db (make-temp-file "sqlite3-test-"))
+         (p1 (sqlite3-onetime-stream db "CREATE TABLE hoge (id);" (lambda (x)))))
+    (sqlite3-test-wait-exit p1)
+    (let ((query (mapconcat
+                  'identity
+                  (mapcar
+                   (lambda (n)
+                     (format "INSERT INTO hoge VALUES(%d);" n))
+                   '(1 2 3 4 5)) "")))
+      (let ((p2 (sqlite3-onetime-stream db query (lambda (x)))))
+        (sqlite3-test-wait-exit p2)))))
+
 (ert-deftest sqlite3-irregular-0001 ()
   :tags '(sqlite3)
   (let* ((db (make-temp-file "sqlite3-test-"))
