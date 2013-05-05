@@ -405,28 +405,6 @@ if you want."
                          string)
     string))
 
-(defvar sqlite3-mode-header-column-separator
-  (let ((sep " "))
-    (sqlite3-mode--propertize-background-header sep)
-    (propertize sep 'display
-                (list 'space :width 1)))
-  "String used to separate tabs.")
-
-(defun sqlite3-mode--put-error (msg)
-  (let ((ov (make-overlay (line-beginning-position) (line-end-position))))
-    (overlay-put ov 'sqlite3-error-row-p t)
-    (overlay-put ov 'sqlite3-error-message msg)
-    (overlay-put ov 'face 'sqlite3-error-line-face)))
-
-(defun sqlite3-mode--get-error ()
-  (loop for o in (overlays-in (line-beginning-position) (line-end-position))
-        if (overlay-get o 'sqlite3-error-row-p)
-        return (overlay-get o 'sqlite3-error-message)))
-
-(defun sqlite3-mode--clear-error ()
-  (remove-overlays (line-beginning-position) (line-end-position)
-                   'sqlite3-error-row-p t))
-
 (defun sqlite3-mode-open-table (table)
   (sqlite3-mode--check-stream)
   (sqlite3-table-mode)
@@ -835,6 +813,28 @@ if you want."
                      :where (sqlite3-table-mode--compile-filters filters))
           (sqlite3-table-mode--draw-page src))))))
 
+(defvar sqlite3-table-mode-header-column-separator
+  (let ((sep " "))
+    (sqlite3-mode--propertize-background-header sep)
+    (propertize sep 'display
+                (list 'space :width 1)))
+  "String used to separate tabs.")
+
+(defun sqlite3-table-mode--put-error (msg)
+  (let ((ov (make-overlay (line-beginning-position) (line-end-position))))
+    (overlay-put ov 'sqlite3-error-row-p t)
+    (overlay-put ov 'sqlite3-error-message msg)
+    (overlay-put ov 'face 'sqlite3-error-line-face)))
+
+(defun sqlite3-table-mode--get-error ()
+  (loop for o in (overlays-in (line-beginning-position) (line-end-position))
+        if (overlay-get o 'sqlite3-error-row-p)
+        return (overlay-get o 'sqlite3-error-message)))
+
+(defun sqlite3-table-mode--clear-error ()
+  (remove-overlays (line-beginning-position) (line-end-position)
+                   'sqlite3-error-row-p t))
+
 (defun sqlite3-table-mode-revert (&rest dummy)
   (sqlite3-table-mode-redraw-page))
 
@@ -1135,10 +1135,10 @@ if you want."
   `(condition-case err
        (progn
          ,@form
-         (sqlite3-mode--clear-error))
+         (sqlite3-table-mode--clear-error))
      ;;TODO FIXME
      (error
-      (sqlite3-mode--put-error (format "%s" (cdr err)))
+      (sqlite3-table-mode--put-error (format "%s" (cdr err)))
       (signal (car err) (cdr err)))))
 
 (defun sqlite3-table-mode--sync-row (point row)
@@ -1161,15 +1161,14 @@ if you want."
          (keys (sqlite3--filter (lambda (x) (nth 5 x)) schema)))
     (cond
      ((or (/= (length keys) 1)
-          ;;TODO only INTEGER? NUMERIC?
           (not (equal (nth 2 (car keys)) "INTEGER")))
       ;; ROWID
       (car row))
      (t
-      ;; single INTEGER primary key is used as ROWID
+      ;; single INTEGER primary key is used as a ROWID
       (let ((pair (assoc (nth 1 (car keys)) row)))
         (if (and pair (nth 2 pair))
-            ;; primary key value
+            ;; 2: primary key value
             (nth 2 pair)
           (car row)))))))
 
@@ -1260,7 +1259,7 @@ if you want."
            (message "Updating... Done.")))
         (setq sqlite3-table-mode--processing-row nil))
        (t
-        (sqlite3-mode--clear-error))))))
+        (sqlite3-table-mode--clear-error))))))
 
 (defun sqlite3-table-mode--goto-row (search)
   (let ((first (point))
@@ -1298,7 +1297,7 @@ if you want."
                     ;;  set t after first displaying column in window
                     with flag
                     for col in (sqlite3-table-mode-ref :view :columns)
-                    ;; add `sqlite3-mode-header-column-separator' width
+                    ;; add `sqlite3-table-mode-header-column-separator' width
                     sum (1+ (plist-get col :width)) into right
                     if (< hscroll right)
                     collect (let ((name (plist-get col :name))
@@ -1318,7 +1317,7 @@ if you want."
                                  'face 'sqlite3-mode-column-face))))))
              (filler (make-string (frame-width) ?\s))
              (tail (sqlite3-mode--propertize-background-header filler))
-             (separator sqlite3-mode-header-column-separator)
+             (separator sqlite3-table-mode-header-column-separator)
              (left (car (window-inside-edges))))
         (setq header-line-format
               (and disp-headers
@@ -2478,7 +2477,7 @@ TODO about header
   ;; Other code affect to buffer while `sleep-for'.
   ;; TODO timer? filter? I can't get clue.
   (save-excursion
-    ;; Achieve like a asynchronously behavior (ex: draw mode line)
+    ;; Achieve like a asynchronous behavior (ex: draw mode line)
     (redisplay)
     (sleep-for sqlite3-sleep-second)))
 
