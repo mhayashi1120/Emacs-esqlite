@@ -162,7 +162,7 @@
                 ,@(and nullvalue `("-nullvalue" ,nullvalue))
                 "-init" ,(sqlite3-stream--init-file)
                 "-csv"
-                ,file))
+                ,(expand-file-name file)))
         (buf (sqlite3-stream--create-buffer)))
     (with-current-buffer buf
       (let ((stream (apply 'sqlite3-start-process buf args)))
@@ -333,7 +333,7 @@ TODO about header
                  "-init" ,init
                  "-nullvalue" ,nullvalue
                  "-batch"
-                 "-csv" ,file
+                 "-csv" ,(expand-file-name file)
                  ,query))
          (stream (apply 'sqlite3-start-process buf args)))
     (process-put stream 'sqlite3-filter filter)
@@ -698,6 +698,7 @@ FUNC accept just one arg created stream object from `sqlite3-stream-open'."
 ;; Sqlite3 onetime query
 ;;
 
+;;TODO obsolete with-header accept command args?
 ;;;###autoload
 (defun sqlite3-onetime-query (file query &optional with-header)
   "Execute QUERY in sqlite3 FILE just one time.
@@ -715,7 +716,7 @@ TODO about WITH-HEADER
                      "-init" ,init
                      "-nullvalue" ,nullvalue
                      "-batch"
-                     "-csv" ,file
+                     "-csv" ,(expand-file-name file)
                      ,query))
              (exit-code (apply 'sqlite3-call-process buf args)))
         (goto-char (point-min))
@@ -889,12 +890,17 @@ e.g.
 
 ;;;###autoload
 (defun sqlite3-installed-p ()
-  (executable-find sqlite3-program))
+  "Return non-nil if `sqlite3-program' is installed."
+  (and (stringp sqlite3-program)
+       (executable-find sqlite3-program)))
 
 ;;;###autoload
 (defun sqlite3-find-file (file)
   "Open FILE as Sqlite3 database.
 This function only open FILE which is existing.
+
+FYI Normally, sqlite3 database open automatically `sqlite3-view-mode' but
+huge file cannot. This function provides to open such file.
 "
   (interactive "FSqlite3 File: ")
   (unless (sqlite3-file-guessed-database-p file)
@@ -917,7 +923,7 @@ This function only open FILE which is existing.
 
 ;;;###autoload
 (defun sqlite3-view-mode ()
-  "TODO"
+  "View current file as a sqlite3 database."
   (interactive)
   (set-buffer-modified-p nil)
   (sqlite3-mode-open-schema-mode t))
@@ -1021,12 +1027,13 @@ If changed data violate database constraint, transaction will be rollback.
   "Cause of unknown problem of editing buffer, reset sqlite3 command stream
 if you want."
   (interactive)
-  (when (y-or-n-p "Restart sqlite3 process with discarding changes? ")
-    (when (sqlite3-mode-ref :stream)
-      (sqlite3-stream-close (sqlite3-mode-ref :stream)))
-    (sqlite3-mode--check-stream)
-    ;;TODO generic function
-    (sqlite3-mode-redraw-page)))
+  (unless (y-or-n-p "Restart sqlite3 process with discarding changes? ")
+    (signal 'quit nil))
+  (when (sqlite3-mode-ref :stream)
+    (sqlite3-stream-close (sqlite3-mode-ref :stream)))
+  (sqlite3-mode--check-stream)
+  ;;TODO generic function
+  (sqlite3-mode-redraw-page))
 
 ;;TODO separate table-mode schema-mode
 (defun sqlite3-mode-send-sql (sql)
