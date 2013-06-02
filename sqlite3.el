@@ -117,15 +117,19 @@
   "Face for any NULL."
   :group 'sqlite3)
 
-(defface sqlite3-mode-table-face
+(defface sqlite3-mode-object-face
   '((t (:inherit font-lock-function-name-face)))
-  "todo Face to fontify background of header line."
+  "Face to fontify sqlite3 object."
   :group 'sqlite3)
 
-;;TODO use sqlite3-mode header-line?
+(defface sqlite3-mode-table-face
+  '((t (:inherit sqlite3-mode-object-face)))
+  "Face to fontify sqlite3 table."
+  :group 'sqlite3)
+
 (defface sqlite3-mode-column-face
   '((t (:inherit font-lock-variable-name-face)))
-  "todo Face to fontify background of header line."
+  "Face to fontify sqlite3 table column."
   :group 'sqlite3)
 
 ;;;
@@ -578,6 +582,8 @@ if you want."
     (setq sqlite3-table-mode--popup-timer
           (run-with-idle-timer
            1 t 'sqlite3-table-mode-popup-contents))))
+
+(put 'sqlite3-table-mode 'mode-class 'special)
 
 (defun sqlite3-table-mode-view-cell ()
   "View current cell with opening subwindow."
@@ -1732,6 +1738,8 @@ if you want."
   (set (make-local-variable 'revert-buffer-function)
        'sqlite3-schema-mode-revert))
 
+(put 'sqlite3-schema-mode 'mode-class 'special)
+
 (defun sqlite3-schema-mode-open-table ()
   (interactive)
   (let ((item (get-text-property (point) 'sqlite3-schema-item)))
@@ -1742,7 +1750,6 @@ if you want."
       (sqlite3-schema-mode--evacuate-buffer)
       (let ((name (plist-get item :name)))
         (sqlite3-mode-open-table name)))
-     ;;TODO
      (t
       (error "Cannot open %s as table" (plist-get item :type))))))
 
@@ -1908,7 +1915,7 @@ if you want."
                   (format "%s%s\n"
                           sqlite3-schema-mode--close-icon
                           ;;TODO change face-name
-                          (propertize obj 'face 'sqlite3-mode-table-face)))
+                          (propertize obj 'face 'sqlite3-mode-object-face)))
                  (put-text-property
                   start (point)
                   'sqlite3-schema-item table))
@@ -1934,7 +1941,7 @@ if you want."
                          (plist-put parent :schema s)
                          s))))
       (forward-line 1)
-      (let* ((headers '("NAME" "TYPE" "NOT NULL" "DEFAULT" "KEY"))
+      (let* ((headers '("NAME" "TYPE" "NULL" "DEFAULT" "KEY"))
              (start (point))
              (data (cons headers schema))
              (width-def (sqlite3-mode--calculate-width data))
@@ -1983,12 +1990,12 @@ if you want."
         in (sqlite3-table-schema
             (sqlite3-mode-ref :stream) name)
         collect (list name type
-                      (or (and notnull "yes") "no")
+                      (if notnull "no" "yes")
                       (or default "no")
                       (or (and primaryp "*") ""))))
 
 ;;;
-;;; Sqlite3 binary mode
+;;; Sqlite3 binary mode (TODO no need?)
 ;;;
 
 (defvar sqlite3-binary-mode-map nil)
@@ -2008,7 +2015,7 @@ if you want."
 (defun sqlite3-mode-toggle-view ()
   "Toggle sqlite3 view <-> binary view"
   (interactive)
-  (if (sqlite3-mode-binary-view-p)
+  (if sqlite3-binary-mode
       (sqlite3-view-mode)
     (sqlite3-mode-binary-view)))
 
@@ -2024,11 +2031,6 @@ if you want."
     (when read-only
       (setq buffer-read-only t))
     (sqlite3-binary-mode 1)))
-
-(defun sqlite3-mode-binary-view-p ()
-  (save-excursion
-    (goto-char (point-min))
-    (looking-at sqlite3-file-header-regexp)))
 
 ;;;
 ;;; Sqlite3 cell mode
@@ -2637,27 +2639,15 @@ Elements of the item list are:
 
 (defun sqlite3--temp-name (objects prefix)
   (loop with name = (concat prefix "_backup")
+        with v = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
         while (member name objects)
         do (setq name
                  (concat prefix
                          "_backup_"
                          (loop repeat 8
-                               with v = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
                                collect (aref v (random 62)) into res
                                finally return (concat res))))
         finally return name))
-
-(defun sqlite3-killing-emacs ()
-  (dolist (proc (process-list))
-    (when (process-get proc 'sqlite3-stream-process-p)
-      (condition-case err
-          (sqlite3-stream-close proc)
-        (error (message "Sqlite3: %s" err))))))
-
-(add-hook 'kill-emacs-hook 'sqlite3-killing-emacs)
-
-(defun sqlite3-unload-function ()
-  (remove-hook 'kill-emacs-hook 'sqlite3-killing-emacs))
 
 ;;;
 ;;; Synchronous utilities
@@ -2756,12 +2746,93 @@ TODO about WITH-HEADER
     (lambda (stream)
       (sqlite3-table-schema stream table))))
 
+;;;###autoload
+(defun sqlite3-escape (string &optional quote-char)
+  "Escape STRING as a sqlite3 string object context.
+Optional QUOTE-CHAR arg indicate quote-char
+
+e.g.
+\(let ((user-input \"a\\\"'b\"))
+  (format \"SELECT * FROM T WHERE a = '%s'\" (sqlite3-escape user-input ?\\')))
+  => \"SELECT * FROM T WHERE a = 'a\\\"''b'\"
+
+\(let ((user-input \"a\\\"'b\"))
+  (format \"SELECT * FROM T WHERE a = \\\"%s\\\"\" (sqlite3-escape user-input ?\\\")))
+  => \"SELECT * FROM T WHERE a = \\\"a\\\"\\\"'b\\\"\"
+"
+  (setq quote-char (or quote-char ?\'))
+  (sqlite3--replace
+   string
+   `((,quote-char . ,(format "%c%c" quote-char quote-char)))))
+
+;;TODO sqlite3 -header hogehoge.db "select 'a_b' like 'a\_b' escape '\\'"
+;; sqlite3 ~/tmp/hogehoge.db "select 'a_b' like 'ag_b' escape 'g'"
+
+;; escape `LIKE' query from user input.
+;;;###autoload
+(defun sqlite3-escape-like (query escape-char)
+  (sqlite3--replace
+   query
+   `((?\% . ,(format "%c%%" escape-char))
+     (?\_ . ,(format "%c_"  escape-char))
+     (,escape-char . ,(format "%c%c"  escape-char escape-char)))))
+
 (defun sqlite3-plist-merge (src dest)
   (loop for props on src by 'cddr
         do (let ((name (car props))
                  (val (cadr props)))
              (plist-put dest name val)))
   dest)
+
+(defun sqlite3--replace (string init-table)
+  (loop with table = init-table
+        with res
+        for c across string
+        concat (let ((pair (assq c table)))
+                 (cond
+                  ((not pair)
+                   (setq table init-table)
+                   (char-to-string c))
+                  ((stringp (cdr pair))
+                   (setq table init-table)
+                   (cdr pair))
+                  ((consp (cdr pair))
+                   (setq table (cdr pair))
+                   nil)
+                  (t
+                   (error "Not supported yet"))))))
+
+(defun sqlite3--filter (filter list)
+  (loop for o in list
+        if (funcall filter o)
+        collect o))
+
+;;;
+;;; Package load/unload
+;;;
+
+(defun sqlite3-killing-emacs ()
+  (dolist (proc (process-list))
+    (when (process-get proc 'sqlite3-stream-process-p)
+      (condition-case err
+          (sqlite3-stream-close proc)
+        (error (message "Sqlite3: %s" err))))))
+
+(defun sqlite3-unload-function ()
+  (let ((pair (rassq 'sqlite3-view-mode magic-mode-alist)))
+    (when pair
+      (setq magic-mode-alist (delq pair magic-mode-alist))))
+  (remove-hook 'kill-emacs-hook 'sqlite3-killing-emacs))
+
+(add-hook 'kill-emacs-hook 'sqlite3-killing-emacs)
+
+;;;###autoload
+(setq magic-mode-alist
+      `((,sqlite3-file-header-regexp . sqlite3-view-mode)))
+
+
+
+;;;; TODO TESTING
 
 (defun sqlite3-create-alternate-table (stream create-sql)
   "Execute CREATE-SQL in STREAM. This function not begin transaction.
@@ -2802,63 +2873,6 @@ If you need transaction, begin transaction by your own before calling this funct
       (sqlite3-stream-execute-sql stream insert-object))
     (let ((drop-temp (format "DROP TABLE %s" temp-table)))
       (sqlite3-stream-execute-sql stream drop-temp))))
-
-;;;###autoload
-(defun sqlite3-escape (string &optional quote-char)
-  "Escape STRING as a sqlite3 string object context.
-Optional QUOTE-CHAR arg indicate quote-char
-
-e.g.
-\(let ((user-input \"a\\\"'b\"))
-  (format \"SELECT * FROM T WHERE a = '%s'\" (sqlite3-escape user-input ?\\')))
-  => \"SELECT * FROM T WHERE a = 'a\\\"''b'\"
-
-\(let ((user-input \"a\\\"'b\"))
-  (format \"SELECT * FROM T WHERE a = \\\"%s\\\"\" (sqlite3-escape user-input ?\\\")))
-  => \"SELECT * FROM T WHERE a = \\\"a\\\"\\\"'b\\\"\"
-"
-  (setq quote-char (or quote-char ?\'))
-  (sqlite3--replace
-   string
-   `((,quote-char . ,(format "%c%c" quote-char quote-char)))))
-
-;;TODO sqlite3 -header hogehoge.db "select 'a_b' like 'a\_b' escape '\\'"
-;; sqlite3 ~/tmp/hogehoge.db "select 'a_b' like 'ag_b' escape 'g'"
-
-;; escape `LIKE' query from user input.
-;;;###autoload
-(defun sqlite3-escape-like (query escape-char)
-  (sqlite3--replace
-   query
-   `((?\% . ,(format "%c%%" escape-char))
-     (?\_ . ,(format "%c_"  escape-char))
-     (,escape-char . ,(format "%c%c"  escape-char escape-char)))))
-
-(defun sqlite3--replace (string init-table)
-  (loop with table = init-table
-        with res
-        for c across string
-        concat (let ((pair (assq c table)))
-                 (cond
-                  ((not pair)
-                   (setq table init-table)
-                   (char-to-string c))
-                  ((stringp (cdr pair))
-                   (setq table init-table)
-                   (cdr pair))
-                  ((consp (cdr pair))
-                   (setq table (cdr pair))
-                   nil)
-                  (t
-                   (error "Not supported yet"))))))
-
-(defun sqlite3--filter (filter list)
-  (loop for o in list
-        if (funcall filter o)
-        collect o))
-
-
-;;;; TODO TESTING
 
 ;;TODO non used
 (defun sqlite3-mode--faced-insert (face &rest args)
