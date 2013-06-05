@@ -158,11 +158,12 @@
   (when (and nullvalue 
              (> (length nullvalue) 19))
     (error "Null text too long"))
-  (let ((args `("-interactive"
-                ,@(and nullvalue `("-nullvalue" ,nullvalue))
-                "-init" ,(sqlite3-stream--init-file)
-                "-csv"
-                ,(expand-file-name file)))
+  (let* ((init (sqlite3-stream--init-file))
+         (args `("-interactive"
+                 ,@(and nullvalue `("-nullvalue" ,nullvalue))
+                 "-init" ,init
+                 "-csv"
+                 ,(expand-file-name file)))
         (buf (sqlite3-stream--create-buffer)))
     (with-current-buffer buf
       (let ((stream (apply 'sqlite3-start-process buf args)))
@@ -522,6 +523,7 @@ TODO about header
             (sqlite3--create-init-file))))
 
 ;;TODO rename?
+;;TODO cleanup tempfile
 (defun sqlite3--create-init-file (&optional commands)
   (let ((file (make-temp-file "emacs-sqlite3-")))
     (with-temp-buffer
@@ -719,13 +721,16 @@ TODO about WITH-HEADER
                      "-csv" ,(expand-file-name file)
                      ,query))
              (exit-code (apply 'sqlite3-call-process buf args)))
-        (goto-char (point-min))
-        (unless (eq exit-code 0)
-          (let ((errmsg (sqlite3--read-syntax-error-at-point)))
-            (when errmsg
-              (error "%s" errmsg)))
-          (error "%s" (buffer-string)))
-        (sqlite3--read-csv-with-deletion nullvalue)))))
+        (unwind-protect
+            (progn
+              (goto-char (point-min))
+              (unless (eq exit-code 0)
+                (let ((errmsg (sqlite3--read-syntax-error-at-point)))
+                  (when errmsg
+                    (error "%s" errmsg)))
+                (error "%s" (buffer-string)))
+              (sqlite3--read-csv-with-deletion nullvalue))
+          (delete-file init))))))
 
 ;;TODO erase?
 ;; (defun sqlite3-file-read-table (file table &optional where order)
@@ -782,6 +787,8 @@ e.g.
 ;; sqlite3 ~/tmp/hogehoge.db "select 'a_b' like 'ag_b' escape 'g'"
 
 ;; escape `LIKE' query from user input.
+
+;; TODO SELECT * FROM hoge WHERE name LIKE '%100\\%%' ESCAPE '\\'
 ;;;###autoload
 (defun sqlite3-escape-like (query escape-char)
   (sqlite3--replace
@@ -829,7 +836,10 @@ e.g.
     (when (process-get proc 'sqlite3-stream-process-p)
       (condition-case err
           (sqlite3-stream-close proc)
-        (error (message "Sqlite3: %s" err))))))
+        (error (message "Sqlite3: %s" err)))))
+  (when (and (stringp sqlite3-stream--init-file)
+             (file-exists-p sqlite3-stream--init-file))
+    (delete-file sqlite3-stream--init-file)))
 
 (defun sqlite3-unload-function ()
   (let ((pair (rassq 'sqlite3-view-mode magic-mode-alist)))
