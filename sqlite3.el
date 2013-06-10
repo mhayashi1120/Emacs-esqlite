@@ -167,11 +167,11 @@
         (buf (sqlite3-stream--create-buffer)))
     (with-current-buffer buf
       (let ((stream (apply 'sqlite3-start-process buf args)))
-        (set-process-filter stream 'sqlite3-stream--filter)
-        (set-process-sentinel stream 'sqlite3-stream--sentinel)
         (process-put stream 'sqlite3-stream-filename file)
         (process-put stream 'sqlite3-init-null-value nullvalue)
         (process-put stream 'sqlite3-null-value nullvalue)
+        (set-process-filter stream 'sqlite3-stream--filter)
+        (set-process-sentinel stream 'sqlite3-stream--sentinel)
         ;; wait until prompt
         (sqlite3-stream--until-prompt stream)
         stream))))
@@ -322,6 +322,7 @@ Good: SELECT * FROM table1\n
 (defun sqlite3-onetime-stream (file query filter &optional with-header)
   "Execute QUERY in sqlite3 FILE just one time.
 FILTER called with one arg that is parsed csv line or `:EOF'.
+  FILTER is invoked in process buffer.
 
 TODO about header
 "
@@ -339,6 +340,7 @@ TODO about header
          (stream (apply 'sqlite3-start-process buf args)))
     (process-put stream 'sqlite3-filter filter)
     (process-put stream 'sqlite3-null-value nullvalue)
+    (process-put stream 'sqlite3-init-file init)
     (set-process-filter stream 'sqlite3-onetime-stream--filter)
     (set-process-sentinel stream 'sqlite3-onetime-stream--sentinel)
     (sqlite3--maybe-raise-syntax-error stream)
@@ -359,7 +361,11 @@ TODO about header
       (let ((filter (process-get proc 'sqlite3-filter)))
         (when (functionp filter)
           (funcall filter :EOF)))
-      (kill-buffer (current-buffer)))))
+      (kill-buffer (current-buffer))
+      ;;TODO consider using `sqlite3-stream--init-file'
+      (let ((init (process-get proc 'sqlite3-init-file)))
+        (when (and init (file-exists-p init))
+          (delete-file init))))))
 
 ;;;
 ;;; Sqlite3 lazy reader
@@ -524,6 +530,7 @@ TODO about header
 
 ;;TODO rename?
 ;;TODO cleanup tempfile
+;;TODO consider specification all of temp init specification use same file?
 (defun sqlite3--create-init-file (&optional commands)
   (let ((file (make-temp-file "emacs-sqlite3-")))
     (with-temp-buffer
@@ -576,6 +583,23 @@ TODO about header
       (goto-char first)
       (signal 'invalid-read-syntax nil))
     line))
+
+;; try to read STRING until end.
+;; csv line may not terminated and may contain newline.
+(defun sqlite3--read-csv/try (string)
+  (with-temp-buffer
+    (insert string)
+    (goto-char (point-min))
+    (let ((res '())
+          (start (point)))
+      ;;TODO check end-of-buffer contain newline? or count columns?
+      (condition-case nil
+          (while (not (eobp))
+            (let ((ln (pcsv-read-line)))
+              (setq start (point))
+              (setq res (cons ln res))))
+        (invalid-read-syntax))
+      (list (nreverse res) (buffer-substring start (point-max))))))
 
 (defun sqlite3-format-object (object)
   ;;TODO some escape?
@@ -765,17 +789,17 @@ TODO about WITH-HEADER
       (sqlite3-table-schema stream table))))
 
 ;;;###autoload
-(defun sqlite3-escape (string &optional quote-char)
+(defun sqlite3-escape-string (string &optional quote-char)
   "Escape STRING as a sqlite3 string object context.
 Optional QUOTE-CHAR arg indicate quote-char
 
 e.g.
 \(let ((user-input \"a\\\"'b\"))
-  (format \"SELECT * FROM T WHERE a = '%s'\" (sqlite3-escape user-input ?\\')))
+  (format \"SELECT * FROM T WHERE a = '%s'\" (sqlite3-escape-string user-input ?\\')))
   => \"SELECT * FROM T WHERE a = 'a\\\"''b'\"
 
 \(let ((user-input \"a\\\"'b\"))
-  (format \"SELECT * FROM T WHERE a = \\\"%s\\\"\" (sqlite3-escape user-input ?\\\")))
+  (format \"SELECT * FROM T WHERE a = \\\"%s\\\"\" (sqlite3-escape-string user-input ?\\\")))
   => \"SELECT * FROM T WHERE a = \\\"a\\\"\\\"'b\\\"\"
 "
   (setq quote-char (or quote-char ?\'))
@@ -783,20 +807,51 @@ e.g.
    string
    `((,quote-char . ,(format "%c%c" quote-char quote-char)))))
 
+;; todo make private?
+(defun sqlite3-like-table (escape-char &optional override)
+  (append
+   override
+   `((?\% . ,(format "%c%%" escape-char))
+     (?\_ . ,(format "%c_"  escape-char))
+     (,escape-char . ,(format "%c%c"  escape-char escape-char)))))
+
+;;;###autoload
+(defun sqlite3-glob-to-like (pattern &optional escape-char)
+  "Convenient function to provide unix like glob PATTERN to sql LIKE pattern
+
+See related information in `sqlite3-escape-like'
+
+e.g. hoge*foo -> hoge%foo
+     hoge?foo -> hoge_foo"
+  (sqlite3--replace
+   pattern
+   (sqlite3-like-table
+    (or escape-char ?\\)
+    '((?* . "%")
+      (?\? . "_")))))
+
 ;;TODO sqlite3 -header hogehoge.db "select 'a_b' like 'a\_b' escape '\\'"
 ;; sqlite3 ~/tmp/hogehoge.db "select 'a_b' like 'ag_b' escape 'g'"
 
 ;; escape `LIKE' query from user input.
 
-;; TODO SELECT * FROM hoge WHERE name LIKE '%100\\%%' ESCAPE '\\'
 ;;;###autoload
-(defun sqlite3-escape-like (query escape-char)
+(defun sqlite3-escape-like (query &optional escape-char)
+  "Escape QUERY as a sql like context.
+This function is not quote single-quote (') you should use with
+`sqlite3-escape-text'.
+
+ESCAPE-CHAR is optional char (default '\\') for escape sequence expressed
+following sqlite3 syntax.
+e.g. fuzzy search of \"100%\" text in `value' column in `hoge' table.
+   SELECT * FROM hoge WHERE value LIKE '%100\\%%' ESCAPE '\\'
+   => (concat \"%\" (sqlite3-escape-like \"100%\" ?\\\\) \"%\")
+   => \"%100\\%%\""
   (sqlite3--replace
    query
-   `((?\% . ,(format "%c%%" escape-char))
-     (?\_ . ,(format "%c_"  escape-char))
-     (,escape-char . ,(format "%c%c"  escape-char escape-char)))))
+   (sqlite3-like-table escape-char)))
 
+;;TODO remove
 (defun sqlite3-plist-merge (src dest)
   (loop for props on src by 'cddr
         do (let ((name (car props))
@@ -907,14 +962,17 @@ e.g.
 ;;;###autoload
 (defun sqlite3-find-file (file)
   "Open FILE as Sqlite3 database.
-This function only open FILE which is existing.
 
 FYI Normally, sqlite3 database open automatically `sqlite3-view-mode' but
 huge file cannot. This function provides to open such file.
 "
   (interactive "FSqlite3 File: ")
-  (unless (sqlite3-file-guessed-database-p file)
-    (error "Not a valid database file"))
+  (cond
+   ((file-exists-p file)
+    (unless (sqlite3-file-guessed-database-p file)
+      (error "Not a valid database file")))
+   ((not (y-or-n-p "File not exists. Create a Sqlite3 database? "))
+    (user-error "Quit")))
   (let ((buf (get-file-buffer file)))
     (unless buf
       (setq buf (create-file-buffer (file-name-nondirectory file)))
@@ -1563,29 +1621,6 @@ if you want."
   (let ((source (copy-sequence (sqlite3-table-mode-ref :source))))
     (plist-put source :where nil)
     (sqlite3-table-mode--draw-page source)))
-
-;;TODO
-(defun sqlite3-table-mode-isearch ()
-  (interactive)
-  (let* ((columns (sqlite3-table-mode-ref :view :columns))
-         (source (sqlite3-table-mode-ref :source))
-         (text "")
-         (orig-where (or (plist-get source :where) ""))
-         done)
-    (while (not done)
-      (let ((c (read-char (format "isearch: %s" text))))
-        (setq text (concat text (char-to-string c)))
-        ;; TODO quote text % _ and sqlite3-escape
-        (let* ((like (format "%%%s%%" text))
-               (src (copy-sequence source))
-               (filters (cons 'or
-                              (mapcar
-                               (lambda (col)
-                                 (list col "like" like))
-                               columns))))
-          (plist-put src
-                     :where (sqlite3-table-mode--compile-filters filters))
-          (sqlite3-table-mode--draw-page src))))))
 
 (defvar sqlite3-table-mode-header-column-separator
   (let ((sep " "))
@@ -2578,7 +2613,7 @@ if you want."
              (concat "SELECT sql "
                      " FROM sqlite_master"
                      (format " WHERE type = '%s'" type)
-                     (format " AND name = '%s'" (sqlite3-escape name)))))
+                     (format " AND name = '%s'" (sqlite3-escape-string name)))))
            (t
             (error "Not a supported type `%s'" type))))
          (ddl (caar results)))
@@ -2848,6 +2883,63 @@ if you want."
 ;;;###autoload
 (setq magic-mode-alist
       `((,sqlite3-file-header-regexp . sqlite3-view-mode)))
+
+
+;;;
+;;; todo Sqlite3 for helm (testing)
+;;;
+
+;;TODO split other elisp
+
+(defvar sqlite3-helm-history nil)
+
+(defun sqlite3-helm-define (source)
+  (let ((file (cdr (assq 'sqlite3-db source)))
+        (query (cdr (assq 'sqlite3-query source))))
+    ;;TODO real-to-display
+    ;;TODO pattern-transformer
+    (let ((result
+           `((name . "sqlite3")
+             (candidates-process
+              .
+              (lambda ()
+                (sqlite3-helm-invoke-command
+                 ,file
+                 (funcall ,query helm-pattern))))
+             (history . sqlite3-helm-history)
+             (candidate-number-limit . 100)
+             (no-matchplugin)
+             (candidate-transformer . sqlite3-helm-hack-for-multiline)
+             )))
+      (dolist (s source)
+        (let ((cell (assq (car s) result)))
+          (if cell
+              (setcdr cell (cdr s))
+            (setq result (cons s result)))))
+      result)))
+
+(defun sqlite3-helm-invoke-command (file query)
+  "Initialize async locate process for `helm-source-locate'."
+  (let ((proc (sqlite3-start-process
+               helm-buffer
+               "-csv" "-batch"
+               ;;TODO init file
+               (expand-file-name file) query)))
+    (set-process-sentinel
+     proc
+     (lambda (proc event)
+       (when (memq (process-status proc) '(exit signal))
+         (helm-log "Error: sqlite3 %s"
+                   (replace-regexp-in-string "\n" "" event)))))
+    proc))
+
+(defun sqlite3-helm-hack-for-multiline (candidates)
+  (let ((rawtext (mapconcat 'identity candidates "\n"))
+        ;; TODO  how to get source safely...
+        (incomplete-info (and (boundp 'source) (assq 'incomplete-line source))))
+    (destructuring-bind (data rest) (sqlite3--read-csv/try rawtext)
+      (setcdr incomplete-info (concat rest (cdr incomplete-info)))
+      data)))
 
 
 
