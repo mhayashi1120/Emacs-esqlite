@@ -18,15 +18,15 @@
           (should (sqlite3-stream-execute-sql stream "INSERT INTO hoge VALUES (2, 'b')"))
           (should (equal (sqlite3-stream-execute-query
                           stream "SELECT * FROM hoge ORDER BY id")
-                         '(("id" "text") ("1" "a") ("2" "b"))))
+                         '(("1" "a") ("2" "b"))))
           (should (sqlite3-stream-execute-sql stream "UPDATE hoge SET id = id + 10, text = text || 'z'"))
           (should (equal
                    (sqlite3-stream-execute-query stream "SELECT * FROM hoge")
-                   '(("id" "text") ("11" "az") ("12" "bz"))))
+                   '(("11" "az") ("12" "bz"))))
           (should (sqlite3-stream-execute-sql stream "DELETE FROM hoge WHERE id = 11"))
           (should (equal
                    (sqlite3-stream-execute-query stream "SELECT * FROM hoge")
-                   '(("id" "text") ("12" "bz"))))
+                   '(("12" "bz"))))
           )
       (sqlite3-stream-close stream))))
 
@@ -69,9 +69,15 @@
 
 (ert-deftest sqlite3-escape ()
   :tags '(sqlite3)
-  (should (equal "A" (sqlite3-escape "A") ))
-  (should (equal "A''''" (sqlite3-escape "A''")))
-  (should (equal "A''\"" (sqlite3-escape "A'\"")))
-  (should (equal "A'\"\"" (sqlite3-escape "A'\"" ?\")))
+  (should (equal "A" (sqlite3-escape-string "A") ))
+  (should (equal "A''''" (sqlite3-escape-string "A''")))
+  (should (equal "A''\"" (sqlite3-escape-string "A'\"")))
+  (should (equal "A'\"\"" (sqlite3-escape-string "A'\"" ?\")))
   (should (equal "A" (sqlite3-escape-like "A" ?\\)))
   (should (equal "A\\%\\_" (sqlite3-escape-like "A%_" ?\\))))
+
+(ert-deftest sqlite3-glob-to-like ()
+  :tags '(sqlite3)
+  (should (equal "a" (sqlite3-glob-to-like "a")))
+  (should (equal "%ab_" (sqlite3-glob-to-like "*ab?")))
+  (should (equal "\\_a" (sqlite3-glob-to-like "_a" ?\\))))
