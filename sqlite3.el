@@ -166,10 +166,10 @@
   (let* ((init (sqlite3--default-init-file))
          (db (expand-file-name file))
          (args `(
-                 "-init" ,init
-                 "-nullvalue" ,nullvalue
                  "-batch"
+                 "-init" ,init
                  "-csv"
+                 "-nullvalue" ,nullvalue
                  ,@args
                  ,db ,query)))
     (apply 'sqlite3-call-process (current-buffer) args)))
@@ -192,6 +192,9 @@
 
 ;;;###autoload
 (defun sqlite3-stream-open (file &optional nullvalue)
+  "Open FILE stream as sqlite3 database.
+Optional NULLVALUE indicate text expression of NULL. This option may improve
+the response of stream."
   (sqlite3-check-program)
   (when (and nullvalue 
              (> (length nullvalue) 19))
@@ -386,14 +389,12 @@ FILTER called with one arg that is parsed csv line or `:EOF'.
 
 ;;;###autoload
 (defun sqlite3-reader-open (file query)
+  ;; Open FILE as sqlite3 database.
   ;; TODO doc
-  (let ((stream (sqlite3-stream-open file))
-        (nullvalue (sqlite3-temp-null query)))
-    ;; handling NULL text
-    (sqlite3-stream--send-command
-     stream (format ".nullvalue '%s'" nullvalue))
-    (process-put stream 'sqlite3-null-value nullvalue)
+  (let* ((nullvalue (sqlite3-temp-null query))
+         (stream (sqlite3-stream-open file nullvalue)))
     (sqlite3-stream-execute-sql stream query)
+    ;; TODO :fields with-header option?
     (list :stream stream :results nil
           :position nil :fields nil)))
 
@@ -598,10 +599,9 @@ FILTER called with one arg that is parsed csv line or `:EOF'.
     (goto-char (point-min))
     (let ((res '())
           (start (point)))
-      ;;TODO check end-of-buffer contain newline? or count columns?
       (condition-case nil
           (while (not (eobp))
-            (let ((ln (pcsv-read-line)))
+            (let ((ln (sqlite3--read-csv-line)))
               (setq start (point))
               (setq res (cons ln res))))
         (invalid-read-syntax))
@@ -804,12 +804,16 @@ e.g.
 
 ;; todo make private?
 (defun sqlite3-like-table (escape-char &optional override)
-  (append
-   override
-   `((?\% . ,(format "%c%%" escape-char))
-     (?\_ . ,(format "%c_"  escape-char))
-     (,escape-char . ,(format "%c%c"  escape-char escape-char)))))
+  (let ((escape (or escape-char ?\\)))
+    (append
+     override
+     `((?\% . ,(format "%c%%" escape))
+       (?\_ . ,(format "%c_"  escape))
+       (,escape . ,(format "%c%c"  escape escape))))))
 
+;;TODO consider fuzzy search
+;;    ^aa* ->  aa%, *bb$ -> %bb
+;;    fuzzy aa -> %aa%
 ;;;###autoload
 (defun sqlite3-glob-to-like (pattern &optional escape-char)
   "Convenient function to provide unix like glob PATTERN to sql LIKE pattern
@@ -821,9 +825,34 @@ e.g. hoge*foo -> hoge%foo
   (sqlite3--replace
    pattern
    (sqlite3-like-table
-    (or escape-char ?\\)
+    escape-char
     '((?* . "%")
       (?\? . "_")))))
+
+
+;;;###autoload
+(defun sqlite3-fuzzy-glob-to-like (pattern &optional escape-char)
+  "TODO Convert PATTERN to like syntax.
+`^' Like regexp, match to start of text.
+`$' Like regexp, match to end of text.
+`*' Like glob, match to text more than 0.
+`?' Like glob, match to a char in text.
+
+If no `^' and `$' are presant, fuzzy match to text.
+
+TODO ESCAPE-CHAR
+"
+  (let ((prefix "")
+        (suffix ""))
+    (if (string-match "\\`\\^" pattern)
+        (setq pattern (substring pattern 1))
+      (setq prefix "%"))
+    (if (string-match "\\$\\'" pattern)
+        (setq pattern (substring pattern 0 -1))
+      (setq suffix "%"))
+    (concat prefix
+            (sqlite3-glob-to-like pattern escape-char)
+            suffix)))
 
 ;;TODO sqlite3 -header hogehoge.db "select 'a_b' like 'a\_b' escape '\\'"
 ;; sqlite3 ~/tmp/hogehoge.db "select 'a_b' like 'ag_b' escape 'g'"
@@ -2891,7 +2920,7 @@ if you want."
 (defun sqlite3-helm-define (source)
   (let ((file (cdr (assq 'sqlite3-db source)))
         (query (cdr (assq 'sqlite3-query source))))
-    ;;TODO real-to-display
+    ;;TODO sample real-to-display
     ;;TODO pattern-transformer
     (let ((result
            `((name . "sqlite3")
@@ -2906,8 +2935,8 @@ if you want."
              (candidate-number-limit . 100)
              ;;TODO what is this?
              (no-matchplugin)
-             (candidate-transformer . sqlite3-helm-hack-for-multiline)
-             )))
+             (delayed)
+             (candidate-transformer . sqlite3-helm-hack-for-multiline))))
       (dolist (s source)
         (let ((cell (assq (car s) result)))
           (if cell
@@ -2917,8 +2946,8 @@ if you want."
 
 (defun sqlite3-helm-invoke-command (file query)
   "Initialize async locate process for `helm-source-locate'."
-  ;;TODO handle nullvalue
-  (let ((proc (sqlite3-start-csv-process file query nil)))
+  ;; sqlite3-helm implementation ignore NULL. (same as empty string)
+  (let ((proc (sqlite3-start-csv-process file query "")))
     (set-process-sentinel
      proc
      (lambda (proc event)
