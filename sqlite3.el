@@ -123,6 +123,13 @@
            (process-put proc 'sqlite3-syntax-error (or errmsg t))))
        ,@form)))
 
+(defvar sqlite3--default-init-file nil)
+
+(defun sqlite3--default-init-file (&optional refresh)
+  (or (and (not refresh) sqlite3--default-init-file)
+      (setq sqlite3--default-init-file
+            (sqlite3--create-init-file))))
+
 (defun sqlite3-start-process (buffer &rest args)
   (sqlite3--with-env
    (let ((proc (apply 'start-process "Sqlite3 Stream" buffer
@@ -135,6 +142,37 @@
 (defun sqlite3-call-process (buffer &rest args)
   (sqlite3--with-env
    (apply 'call-process sqlite3-program nil buffer nil args)))
+
+(defun sqlite3-start-csv-process (file query usernull &rest args)
+  (let* ((init (sqlite3--default-init-file))
+         (db (expand-file-name file))
+         (nullvalue (or usernull (sqlite3-temp-null query)))
+         (args `(
+                 ,@(if query `("-batch") '("-interactive"))
+                 "-init" ,init
+                 "-csv"
+                 "-nullvalue" ,nullvalue
+                 ,@args
+                 ,db ,@(and query `(,query))))
+         (buf (sqlite3-stream--create-buffer))
+         (proc (apply 'sqlite3-start-process buf args)))
+    (process-put proc 'sqlite3-init-file init)
+    (process-put proc 'sqlite3-filename db)
+    (process-put proc 'sqlite3-user-null-value usernull)
+    (process-put proc 'sqlite3-null-value nullvalue)
+    proc))
+
+(defun sqlite3-call-csv-process (file query nullvalue &rest args)
+  (let* ((init (sqlite3--default-init-file))
+         (db (expand-file-name file))
+         (args `(
+                 "-init" ,init
+                 "-nullvalue" ,nullvalue
+                 "-batch"
+                 "-csv"
+                 ,@args
+                 ,db ,query)))
+    (apply 'sqlite3-call-process (current-buffer) args)))
 
 (defun sqlite3--read-syntax-error-at-point ()
   (and (looking-at "^Error: \\(.*\\)")
@@ -150,7 +188,7 @@
   (eq (process-status stream) 'run))
 
 (defun sqlite3-stream-filename (stream)
-  (process-get stream 'sqlite3-stream-filename))
+  (process-get stream 'sqlite3-filename))
 
 ;;;###autoload
 (defun sqlite3-stream-open (file &optional nullvalue)
@@ -158,23 +196,11 @@
   (when (and nullvalue 
              (> (length nullvalue) 19))
     (error "Null text too long"))
-  (let* ((init (sqlite3-stream--init-file))
-         (args `("-interactive"
-                 ,@(and nullvalue `("-nullvalue" ,nullvalue))
-                 "-init" ,init
-                 "-csv"
-                 ,(expand-file-name file)))
-        (buf (sqlite3-stream--create-buffer)))
-    (with-current-buffer buf
-      (let ((stream (apply 'sqlite3-start-process buf args)))
-        (process-put stream 'sqlite3-stream-filename file)
-        (process-put stream 'sqlite3-init-null-value nullvalue)
-        (process-put stream 'sqlite3-null-value nullvalue)
-        (set-process-filter stream 'sqlite3-stream--filter)
-        (set-process-sentinel stream 'sqlite3-stream--sentinel)
-        ;; wait until prompt
-        (sqlite3-stream--until-prompt stream)
-        stream))))
+  (let* ((stream (sqlite3-start-csv-process file nil nullvalue)))
+    (set-process-filter stream 'sqlite3-stream--filter)
+    (set-process-sentinel stream 'sqlite3-stream--sentinel)
+    (sqlite3-stream--wait stream)
+    stream))
 
 (defun sqlite3-stream-close (stream)
   (unless (process-get stream 'sqlite3-stream-process-p)
@@ -212,7 +238,7 @@
   (let ((nullvalue (sqlite3-temp-null query)))
     ;; handling NULL text
     ;; Use different null text each time when executing query.
-    (unless (process-get stream 'sqlite3-init-null-value)
+    (unless (process-get stream 'sqlite3-user-null-value)
       (sqlite3-stream--send-command
        stream (format ".nullvalue '%s'" nullvalue))
       (process-put stream 'sqlite3-null-value nullvalue))
@@ -319,28 +345,15 @@ Good: SELECT * FROM table1\n
 ;;;
 
 ;;;###autoload
-(defun sqlite3-onetime-stream (file query filter &optional with-header)
+(defun sqlite3-onetime-stream (file query filter &rest args)
   "Execute QUERY in sqlite3 FILE just one time.
 FILTER called with one arg that is parsed csv line or `:EOF'.
   FILTER is invoked in process buffer.
 
-TODO about header
 "
   (sqlite3-check-program)
-  (let* ((buf (sqlite3-stream--create-buffer))
-         (nullvalue (sqlite3-temp-null query))
-         (init (sqlite3--create-init-file))
-         (args `(
-                 ,@(and with-header '("-header"))
-                 "-init" ,init
-                 "-nullvalue" ,nullvalue
-                 "-batch"
-                 "-csv" ,(expand-file-name file)
-                 ,query))
-         (stream (apply 'sqlite3-start-process buf args)))
+  (let* ((stream (apply 'sqlite3-start-csv-process file query nil args)))
     (process-put stream 'sqlite3-filter filter)
-    (process-put stream 'sqlite3-null-value nullvalue)
-    (process-put stream 'sqlite3-init-file init)
     (set-process-filter stream 'sqlite3-onetime-stream--filter)
     (set-process-sentinel stream 'sqlite3-onetime-stream--sentinel)
     (sqlite3--maybe-raise-syntax-error stream)
@@ -362,7 +375,7 @@ TODO about header
         (when (functionp filter)
           (funcall filter :EOF)))
       (kill-buffer (current-buffer))
-      ;;TODO consider using `sqlite3-stream--init-file'
+      ;;TODO consider using `sqlite3--default-init-file'
       (let ((init (process-get proc 'sqlite3-init-file)))
         (when (and init (file-exists-p init))
           (delete-file init))))))
@@ -520,13 +533,6 @@ TODO about header
 ;;;
 ;;; Utilities to handle any sqlite3 item.
 ;;;
-
-(defvar sqlite3-stream--init-file nil)
-
-(defun sqlite3-stream--init-file (&optional refresh)
-  (or (and (not refresh) sqlite3-stream--init-file)
-      (setq sqlite3-stream--init-file
-            (sqlite3--create-init-file))))
 
 ;;TODO rename?
 ;;TODO cleanup tempfile
@@ -724,37 +730,26 @@ FUNC accept just one arg created stream object from `sqlite3-stream-open'."
 ;; Sqlite3 onetime query
 ;;
 
-;;TODO obsolete with-header accept command args?
 ;;;###autoload
-(defun sqlite3-onetime-query (file query &optional with-header)
+(defun sqlite3-onetime-query (file query &rest args)
   "Execute QUERY in sqlite3 FILE just one time.
 FILTER called with one arg that is parsed csv line or `:EOF'.
 
-TODO about WITH-HEADER
 "
   (sqlite3-check-program)
   (let ((buf (sqlite3-stream--create-buffer)))
-    (with-current-buffer buf
-      (let* ((nullvalue (sqlite3-temp-null query))
-             (init (sqlite3--create-init-file))
-             (args `(
-                     ,@(and with-header '("-header"))
-                     "-init" ,init
-                     "-nullvalue" ,nullvalue
-                     "-batch"
-                     "-csv" ,(expand-file-name file)
-                     ,query))
-             (exit-code (apply 'sqlite3-call-process buf args)))
-        (unwind-protect
-            (progn
-              (goto-char (point-min))
-              (unless (eq exit-code 0)
-                (let ((errmsg (sqlite3--read-syntax-error-at-point)))
-                  (when errmsg
-                    (error "%s" errmsg)))
-                (error "%s" (buffer-string)))
-              (sqlite3--read-csv-with-deletion nullvalue))
-          (delete-file init))))))
+    (unwind-protect
+        (with-current-buffer buf
+          (let* ((nullvalue (sqlite3-temp-null query))
+                 (exit-code (sqlite3-call-csv-process file query nullvalue args)))
+            (goto-char (point-min))
+            (unless (eq exit-code 0)
+              (let ((errmsg (sqlite3--read-syntax-error-at-point)))
+                (when errmsg
+                  (error "%s" errmsg)))
+              (error "%s" (buffer-string)))
+            (sqlite3--read-csv-with-deletion nullvalue)))
+      (kill-buffer buf))))
 
 ;;TODO erase?
 ;; (defun sqlite3-file-read-table (file table &optional where order)
@@ -892,9 +887,9 @@ e.g. fuzzy search of \"100%\" text in `value' column in `hoge' table.
       (condition-case err
           (sqlite3-stream-close proc)
         (error (message "Sqlite3: %s" err)))))
-  (when (and (stringp sqlite3-stream--init-file)
-             (file-exists-p sqlite3-stream--init-file))
-    (delete-file sqlite3-stream--init-file)))
+  (when (and (stringp sqlite3--default-init-file)
+             (file-exists-p sqlite3--default-init-file))
+    (delete-file sqlite3--default-init-file)))
 
 (defun sqlite3-unload-function ()
   (let ((pair (rassq 'sqlite3-view-mode magic-mode-alist)))
@@ -2907,7 +2902,9 @@ if you want."
                  ,file
                  (funcall ,query helm-pattern))))
              (history . sqlite3-helm-history)
+             ;; TODO default 100?
              (candidate-number-limit . 100)
+             ;;TODO what is this?
              (no-matchplugin)
              (candidate-transformer . sqlite3-helm-hack-for-multiline)
              )))
@@ -2920,11 +2917,8 @@ if you want."
 
 (defun sqlite3-helm-invoke-command (file query)
   "Initialize async locate process for `helm-source-locate'."
-  (let ((proc (sqlite3-start-process
-               helm-buffer
-               "-csv" "-batch"
-               ;;TODO init file
-               (expand-file-name file) query)))
+  ;;TODO handle nullvalue
+  (let ((proc (sqlite3-start-csv-process file query nil)))
     (set-process-sentinel
      proc
      (lambda (proc event)
@@ -2934,9 +2928,11 @@ if you want."
     proc))
 
 (defun sqlite3-helm-hack-for-multiline (candidates)
-  (let ((rawtext (mapconcat 'identity candidates "\n"))
-        ;; TODO  how to get source safely...
-        (incomplete-info (and (boundp 'source) (assq 'incomplete-line source))))
+  ;; helm split csv stream by newline. restore the csv and try
+  ;; to parse
+  (let* ((rawtext (mapconcat 'identity candidates "\n"))
+         (source (helm-get-current-source))
+         (incomplete-info (assq 'incomplete-line source)))
     (destructuring-bind (data rest) (sqlite3--read-csv/try rawtext)
       (setcdr incomplete-info (concat rest (cdr incomplete-info)))
       data)))
