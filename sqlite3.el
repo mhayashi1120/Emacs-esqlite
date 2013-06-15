@@ -5,7 +5,7 @@
 ;; URL: http://github.com/mhayashi1120/sqlite3.el/raw/master/sqlite3.el
 ;; Emacs: GNU Emacs 24 or later
 ;; Version: 0.0.0
-;; Package-Requires: ((pcsv "1.2.0"))
+;; Package-Requires: ((pcsv "1.3.0"))
 
 ;; This program is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU General Public License as
@@ -34,10 +34,10 @@
 ;;; Install:
 
 ;; (autoload 'sqlite3-find-file "sqlite3"
-;;   "Open as Sqlite3 database" t)
+;;   "Open FILE as a Sqlite3 database" t)
 
 ;; (autoload 'sqlite3-file-guessed-database-p "sqlite3"
-;;   "Guess the file is a sqlite3 database or not")
+;;   "Guess the FILE is a sqlite3 database or not")
 
 ;;; TODO:
 ;; * incremental search all data in table
@@ -53,6 +53,8 @@
 
 ;; * sqlite3-mode
 ;;     table is valid -> schema -> read data
+;; * sqlite3-mode
+;;   tool menu, easy menu
 
 ;; * how to edit exclusively. DO NOT USE visited file time. that is nasty.
 ;; * multiple stream will be created too many revert. why??
@@ -96,16 +98,21 @@
 (defun sqlite3--replace (string init-table)
   (loop with table = init-table
         with res
+        with prev
         for c across string
         concat (let ((pair (assq c table)))
                  (cond
                   ((not pair)
                    (setq table init-table)
-                   (char-to-string c))
+                   (prog1
+                       (concat (nreverse prev) (char-to-string c))
+                     (setq prev nil)))
                   ((stringp (cdr pair))
                    (setq table init-table)
+                   (setq prev nil)
                    (cdr pair))
                   ((consp (cdr pair))
+                   (setq prev (cons c prev))
                    (setq table (cdr pair))
                    nil)
                   (t
@@ -284,8 +291,14 @@
                  ,db ,query)))
     (apply 'sqlite3-call-process (current-buffer) args)))
 
+;;;###autoload
+(defun sqlite3-installed-p ()
+  "Return non-nil if `sqlite3-program' is installed."
+  (and (stringp sqlite3-program)
+       (executable-find sqlite3-program)))
+
 (defun sqlite3-check-program ()
-  (unless sqlite3-program
+  (unless (stringp sqlite3-program)
     (error "No valid sqlite3 program"))
   (unless (executable-find sqlite3-program)
     (error "%s not found" sqlite3-program)))
@@ -818,90 +831,6 @@ FILTER called with one arg that is parsed csv line or `:EOF'.
              (plist-put dest name val)))
   dest)
 
-;;;
-;;; Package load/unload
-;;;
-
-(defun sqlite3-killing-emacs ()
-  (dolist (proc (process-list))
-    (when (process-get proc 'sqlite3-stream-process-p)
-      (condition-case err
-          (sqlite3-stream-close proc)
-        (error (message "Sqlite3: %s" err)))))
-  (when (and (stringp sqlite3--default-init-file)
-             (file-exists-p sqlite3--default-init-file))
-    (delete-file sqlite3--default-init-file)))
-
-(defun sqlite3-unload-function ()
-  (let ((pair (rassq 'sqlite3-view magic-mode-alist)))
-    (when pair
-      (setq magic-mode-alist (delq pair magic-mode-alist))))
-  (remove-hook 'kill-emacs-hook 'sqlite3-killing-emacs))
-
-(add-hook 'kill-emacs-hook 'sqlite3-killing-emacs)
-
-;;;
-;;; Any utilities
-;;;
-
-;;TODO erase?
-;; (defun sqlite3-file-read-table (file table &optional where order)
-;;   "Read TABLE data from sqlite3 FILE.
-;; WHERE and ORDER is string that is passed through to sql query.
-;; "
-;;   (sqlite3-call/stream file
-;;     (lambda (stream)
-;;       (sqlite3-stream-execute-query
-;;        stream (format "SELECT * FROM %s WHERE %s %s"
-;;                       table
-;;                       (or where "1 = 1")
-;;                       (or (and order
-;;                                (concat "ORDER BY " order))
-;;                           ""))))))
-
-;; TODO move to sqlite3-helm?
-
-;;TODO consider fuzzy search
-;;    ^aa* ->  aa%, *bb$ -> %bb
-;;    fuzzy aa -> %aa%
-;;;###autoload
-(defun sqlite3-glob-to-like (pattern &optional escape-char)
-  "Convenient function to provide unix like glob PATTERN to sql LIKE pattern
-
-See related information in `sqlite3-escape-like'
-
-e.g. hoge*foo -> hoge%foo
-     hoge?foo -> hoge_foo"
-  (sqlite3--replace
-   pattern
-   (sqlite3-escape--like-table
-    escape-char
-    '((?* . "%")
-      (?\? . "_")))))
-
-;;;###autoload
-(defun sqlite3-fuzzy-glob-to-like (pattern &optional escape-char)
-  "TODO Convert PATTERN to like syntax.
-`^' Like regexp, match to start of text.
-`$' Like regexp, match to end of text.
-`*' Like glob, match to text more than 0.
-`?' Like glob, match to a char in text.
-
-If no `^' and `$' are presant, fuzzy match to text.
-
-TODO ESCAPE-CHAR
-"
-  (let (prefix suffix)
-    (if (string-match "\\`\\^" pattern)
-        (setq pattern (substring pattern 1))
-      (setq prefix "%"))
-    (if (string-match "\\$\\'" pattern)
-        (setq pattern (substring pattern 0 -1))
-      (setq suffix "%"))
-    (concat prefix
-            (sqlite3-glob-to-like pattern escape-char)
-            suffix)))
-
 ;;
 ;; Read object from sqlite3 database
 ;;
@@ -961,6 +890,27 @@ Elements of the item list are:
     (lambda (stream)
       (sqlite3-read-table-schema stream table))))
 
+;;;
+;;; Package load/unload
+;;;
+
+(defun sqlite3-killing-emacs ()
+  (dolist (proc (process-list))
+    (when (process-get proc 'sqlite3-stream-process-p)
+      (condition-case err
+          (sqlite3-stream-close proc)
+        (error (message "Sqlite3: %s" err)))))
+  (when (and (stringp sqlite3--default-init-file)
+             (file-exists-p sqlite3--default-init-file))
+    (delete-file sqlite3--default-init-file)))
+
+(defun sqlite3-unload-function ()
+  (let ((pair (rassq 'sqlite3-view magic-mode-alist)))
+    (when pair
+      (setq magic-mode-alist (delq pair magic-mode-alist))))
+  (remove-hook 'kill-emacs-hook 'sqlite3-killing-emacs))
+
+(add-hook 'kill-emacs-hook 'sqlite3-killing-emacs)
 
 ;;;
 ;;; sqlite3-mode
@@ -1032,6 +982,16 @@ Elements of the item list are:
 
 (defcustom sqlite3-mode-before-transaction-hook nil
   "Run before transaction is started."
+  :group 'sqlite3
+  :type 'hook)
+
+(defcustom sqlite3-mode-after-commit-hook nil
+  "Run after transaction is commit. "
+  :group 'sqlite3
+  :type 'hook)
+
+(defcustom sqlite3-mode-after-rollback-hook nil
+  "Run after transaction is rollback. "
   :group 'sqlite3
   :type 'hook)
 
@@ -1321,12 +1281,14 @@ if you want."
 (defun sqlite3-mode--transaction-rollback ()
   (sqlite3-mode--execute-sql "ROLLBACK")
   (sqlite3-mode-set :transaction nil)
-  (sqlite3-mode-safe-run-hooks 'sqlite3-mode-after-transaction-hook))
+  (sqlite3-mode-safe-run-hooks 'sqlite3-mode-after-transaction-hook)
+  (sqlite3-mode-safe-run-hooks 'sqlite3-mode-after-rollback-hook))
 
 (defun sqlite3-mode--transaction-commit ()
   (sqlite3-mode--execute-sql "COMMIT")
   (sqlite3-mode-set :transaction nil)
-  (sqlite3-mode-safe-run-hooks 'sqlite3-mode-after-transaction-hook))
+  (sqlite3-mode-safe-run-hooks 'sqlite3-mode-after-transaction-hook)
+  (sqlite3-mode-safe-run-hooks 'sqlite3-mode-after-commit-hook))
 
 (defun sqlite3-mode-safe-run-hooks (hook)
   (dolist (f (and (boundp hook)
@@ -2880,14 +2842,8 @@ if you want."
 
 
 ;;;
-;;; Sqlite3 file handling api command
+;;; Sqlite3 database manager interface
 ;;;
-
-;;;###autoload
-(defun sqlite3-installed-p ()
-  "Return non-nil if `sqlite3-program' is installed."
-  (and (stringp sqlite3-program)
-       (executable-find sqlite3-program)))
 
 ;;;###autoload
 (defun sqlite3-find-file (file)

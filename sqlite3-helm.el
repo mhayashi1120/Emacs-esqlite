@@ -42,32 +42,41 @@
   "Face used in mode line when sqlite is finish."
   :group 'helm-grep)
 
+;;TODO coding-system on windows.
+
 ;;;###autoload
 (defun sqlite3-helm-define (source)
-  (let ((file (cdr (assq 'sqlite3-db source)))
-        (query (cdr (assq 'sqlite3-query source))))
-    ;;TODO sample real-to-display
-    ;;TODO pattern-transformer
+  "This function provides extension while `helm' source composing.
+Normally, should not set `candidates-process' directive.
+Following sqlite3 specific directive:
+`sqlite3-db' File name of sqlite3 database.
+`sqlite3-composer' Function which accept one argument `helm-pattern' and return
+    a sql query string."
+  (let ((file (assoc-default 'sqlite3-db source))
+        (composer (assoc-default 'sqlite3-composer source)))
+    (unless (stringp file)
+      (error "sqlite3-db: Not a valid filename %s" file))
+    (unless (functionp composer)
+      (error "sqlite3-composer: Not a valid function"))
     (let ((result
+           ;;TODO consider `match' directive
            `((name . "sqlite3")
              (candidates-process
               .
               (lambda ()
                 (sqlite3-helm-invoke-command
                  ,file
-                 (funcall ,query helm-pattern))))
+                 (funcall ,composer helm-pattern))))
              (history . sqlite3-helm-history)
-             ;; TODO default 100?
-             (candidate-number-limit . 100)
-             ;;TODO what is this?
-             (no-matchplugin)
              (delayed)
              (candidate-transformer . sqlite3-helm-hack-for-multiline))))
       (dolist (s source)
-        (let ((cell (assq (car s) result)))
-          (if cell
-              (setcdr cell (cdr s))
-            (setq result (cons s result)))))
+        (let ((cell (assq (car-safe s) result)))
+          (cond
+           (cell
+            (setcdr cell (cdr s)))
+           (t
+            (setq result (cons s result))))))
       result)))
 
 (defun sqlite3-helm-invoke-command (file query)
@@ -130,6 +139,68 @@
         (invalid-read-syntax))
       (list (nreverse res)
             (buffer-substring-no-properties start (point-max))))))
+
+
+;;;
+;;; Any utilities
+;;;
+
+;;TODO consider fuzzy search
+;;    ^aa* ->  aa%, *bb$ -> %bb
+;;    fuzzy aa -> %aa%
+;;;###autoload
+(defun sqlite3-helm-glob-to-like (glob &optional escape-char)
+  "Convenient function to provide unix like GLOB to sql LIKE pattern
+
+See related information in `sqlite3-escape-like'
+
+e.g. hoge*foo -> hoge%foo
+     hoge?foo -> hoge_foo"
+  (sqlite3--replace
+   glob
+   (sqlite3-escape--like-table
+    escape-char
+    '((?* . "%")
+      (?\? . "_")
+      (?\\ (?\* . "*")
+           (?\? . "?")
+           (?\\ . "\\\\"))))))
+
+;;;###autoload
+(defun sqlite3-helm-fuzzy-glob-to-like (glob &optional escape-char)
+  "TODO Convert GLOB to like syntax.
+`^' Like regexp, match to start of text.
+`$' Like regexp, match to end of text.
+`*' Like glob, match to text more than 0.
+`?' Like glob, match to a char in text.
+
+If no `^' and `$' are presant, fuzzy match to text.
+
+TODO ESCAPE-CHAR
+
+"
+  (let (prefix suffix pattern)
+    (cond
+     ((string-match "\\`\\^" glob)
+      (setq glob (substring glob 1)))
+     ((string-match "\\`\\\\\\^" glob)
+      ;; escaped ^.
+      (setq glob (substring glob 1)
+            prefix "%"))
+     (t
+      (setq prefix "%")))
+    (cond
+     ((string-match "\\`\\(\\\\.\\|[^\\\\]\\)*\\\\$\\'" glob)
+      ;; Match to end of escaped end of `$'
+      (setq glob (concat (substring glob 0 -2) "$"))
+      (setq suffix "%"))
+     ((string-match "\\$\\'" glob)
+      ;; end of non-escaped `$'
+      (setq glob (substring glob 0 -1)))
+     (t
+      (setq suffix "%")))
+    (setq pattern (sqlite3-helm-glob-to-like glob escape-char))
+    (concat prefix pattern suffix)))
 
 
 (provide 'sqlite3-helm)
