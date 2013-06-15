@@ -408,7 +408,6 @@
 ;; Escape text
 ;;
 
-;; todo make private?
 (defun sqlite3-escape--like-table (escape-char &optional override)
   (let ((escape (or escape-char ?\\)))
     (append
@@ -416,6 +415,15 @@
      `((?\% . ,(format "%c%%" escape))
        (?\_ . ,(format "%c_"  escape))
        (,escape . ,(format "%c%c"  escape escape))))))
+
+;;;###autoload
+(defun sqlite3-text (string &optional quote-char)
+  "Convenient function to provide make quoted STRING in sql."
+  (setq quote-char (or quote-char ?\'))
+  (format "%c%s%c"
+          quote-char
+          (sqlite3-escape-string string quote-char)
+          quote-char))
 
 ;;;###autoload
 (defun sqlite3-escape-string (string &optional quote-char)
@@ -436,16 +444,11 @@ e.g.
    string
    `((,quote-char . ,(format "%c%c" quote-char quote-char)))))
 
-;;TODO sqlite3 -header hogehoge.db "select 'a_b' like 'a\_b' escape '\\'"
-;; sqlite3 ~/tmp/hogehoge.db "select 'a_b' like 'ag_b' escape 'g'"
-
-;; escape `LIKE' query from user input.
-
 ;;;###autoload
 (defun sqlite3-escape-like (query &optional escape-char)
-  "Escape QUERY as a sql like context.
+  "Escape QUERY as a sql LIKE context.
 This function is not quote single-quote (') you should use with
-`sqlite3-escape-text'.
+`sqlite3-escape-string' or `sqlite3-text'.
 
 ESCAPE-CHAR is optional char (default '\\') for escape sequence expressed
 following sqlite3 syntax.

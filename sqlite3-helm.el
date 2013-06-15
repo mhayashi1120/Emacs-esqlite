@@ -25,8 +25,6 @@
 ;;; Commentary:
 
 (require 'sqlite3)
-;;TODO need?
-;; (require 'helm)
 
 (declare-function 'helm-log "helm")
 (declare-function 'helm-get-current-source "helm")
@@ -38,7 +36,7 @@
 (defvar sqlite3-helm-history nil)
 
 (defface sqlite3-helm-finish
-    '((t (:foreground "Green")))
+  '((t (:foreground "Green")))
   "Face used in mode line when sqlite is finish."
   :group 'helm-grep)
 
@@ -86,21 +84,24 @@ Following sqlite3 specific directive:
     (set-process-sentinel
      proc
      (lambda (proc event)
+       ;;TODO incomplete-line
        (when (memq (process-status proc) '(exit signal))
-         (with-helm-window
-           (setq mode-line-format
-                 '(" " mode-line-buffer-identification " "
-                   (line-number-mode "%l") " "
-                   (:eval (propertize
-                           (format "[Sqlite3 Process Finish- (%s results)]"
-                                   ;;TODO count-line count all of sources.
-                                   (max (1- (count-lines
-                                             (point-min) (point-max))) 0))
-                           'face 'sqlite3-helm-finish))))
-           (force-mode-line-update))
-         (unless (zerop (process-exit-status proc))
-           (helm-log "Error: sqlite3 %s"
-                     (replace-regexp-in-string "\n" "" event))))))
+         (let ((source (cdr (assq proc helm-async-processes))))
+           (logger-info "%s" (assoc-default 'incomplete-line source))
+           (with-helm-window
+             (setq mode-line-format
+                   '(" " mode-line-buffer-identification " "
+                     (line-number-mode "%l") " "
+                     (:eval (propertize
+                             (format "[Sqlite3 Process Finish- (%s results)]"
+                                     ;;TODO count-line count all of sources.
+                                     (max (1- (count-lines
+                                               (point-min) (point-max))) 0))
+                             'face 'sqlite3-helm-finish))))
+             (force-mode-line-update))
+           (unless (zerop (process-exit-status proc))
+             (helm-log "Error: sqlite3 %s"
+                       (replace-regexp-in-string "\n" "" event)))))))
     proc))
 
 (defun sqlite3-helm-hack-for-multiline (candidates)
@@ -135,7 +136,8 @@ Following sqlite3 specific directive:
           (while (not (eobp))
             (let ((ln (sqlite3--read-csv-line)))
               (setq start (point))
-              (setq res (cons ln res))))
+              ;; TODO investigate it! helm seems ignore first item of list. what is it?
+              (setq res (cons (cons 'dummy ln) res))))
         (invalid-read-syntax))
       (list (nreverse res)
             (buffer-substring-no-properties start (point-max))))))
@@ -145,14 +147,15 @@ Following sqlite3 specific directive:
 ;;; Any utilities
 ;;;
 
-;;TODO consider fuzzy search
-;;    ^aa* ->  aa%, *bb$ -> %bb
-;;    fuzzy aa -> %aa%
 ;;;###autoload
 (defun sqlite3-helm-glob-to-like (glob &optional escape-char)
-  "Convenient function to provide unix like GLOB to sql LIKE pattern
+  "Convenient function to provide unix like GLOB convert to sql like pattern.
 
-See related information in `sqlite3-escape-like'
+`*' Like glob, match to text more equal zero.
+`?' Like glob, match to a char in text.
+
+Above syntax can escape by \\ (backslash). But no relation to ESCAPE-CHAR.
+See related information at `sqlite3-escape-like'.
 
 e.g. hoge*foo -> hoge%foo
      hoge?foo -> hoge_foo"
@@ -160,25 +163,29 @@ e.g. hoge*foo -> hoge%foo
    glob
    (sqlite3-escape--like-table
     escape-char
-    '((?* . "%")
+    `((?* . "%")
       (?\? . "_")
       (?\\ (?\* . "*")
            (?\? . "?")
-           (?\\ . "\\\\"))))))
+           ,@(if (or (eq ?\\ escape-char) (null escape-char))
+                 '((?\\ . "\\\\"))
+               '((?\\ . "\\"))))))))
 
 ;;;###autoload
 (defun sqlite3-helm-fuzzy-glob-to-like (glob &optional escape-char)
-  "TODO Convert GLOB to like syntax.
+  "Convert pseudo GLOB to like syntax to support helm behavior.
+
+Following extended syntax:
+
 `^' Like regexp, match to start of text.
 `$' Like regexp, match to end of text.
-`*' Like glob, match to text more than 0.
-`?' Like glob, match to a char in text.
 
-If no `^' and `$' are presant, fuzzy match to text.
+Above syntax can escape by \\ (backslash). But no relation to ESCAPE-CHAR.
+See related information at `sqlite3-escape-like'.
 
-TODO ESCAPE-CHAR
+If no `^' and `$' are presant, make fuzzy pattern to searching text.
 
-"
+ESCAPE-CHAR pass to `sqlite3-helm-glob-to-like'"
   (let (prefix suffix pattern)
     (cond
      ((string-match "\\`\\^" glob)
@@ -201,7 +208,6 @@ TODO ESCAPE-CHAR
       (setq suffix "%")))
     (setq pattern (sqlite3-helm-glob-to-like glob escape-char))
     (concat prefix pattern suffix)))
-
 
 (provide 'sqlite3-helm)
 
