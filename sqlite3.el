@@ -308,7 +308,8 @@
 ;;
 
 (defun sqlite3--read-csv-with-deletion (null)
-  "Read csv data from current point. Delete csv data if read was succeeded."
+  "Read csv data from current point.
+Delete csv data if reading was succeeded."
   (let (pcsv--eobp res)
     (condition-case nil
         (while (not (eobp))
@@ -452,8 +453,11 @@ This function is not quote single-quote (') you should use with
 
 ESCAPE-CHAR is optional char (default '\\') for escape sequence expressed
 following sqlite3 syntax.
+
 e.g. fuzzy search of \"100%\" text in `value' column in `hoge' table.
    SELECT * FROM hoge WHERE value LIKE '%100\\%%' ESCAPE '\\'
+
+To create the like pattern:
    => (concat \"%\" (sqlite3-escape-like \"100%\" ?\\\\) \"%\")
    => \"%100\\%%\""
   (sqlite3--replace
@@ -546,7 +550,6 @@ the response of stream."
 
 ;;TODO make async interface..
 ;; TODO describe about ((inhibit-redisplay t))
-;;TODO consider ommit-header arg
 (defun sqlite3-stream-execute-query (stream query)
   "Get QUERY result from STREAM
 TODO about redisplay
@@ -629,9 +632,7 @@ Good: SELECT * FROM table1\n
 (defun sqlite3-onetime-stream (file query filter &rest args)
   "Execute QUERY in sqlite3 FILE just one time.
 FILTER called with one arg that is parsed csv line or `:EOF'.
-  FILTER is invoked in process buffer.
-
-"
+  This FILTER is invoked in process buffer."
   (sqlite3-check-program)
   (let* ((stream (apply 'sqlite3-start-csv-process file query nil args)))
     (process-put stream 'sqlite3-filter filter)
@@ -919,6 +920,8 @@ Elements of the item list are:
 ;;; sqlite3-mode
 ;;;
 
+(require 'easymenu)
+
 (defcustom sqlite3-use-highlight-line t
   "Use `hl-line-mode' or not."
   :type 'boolean
@@ -977,6 +980,15 @@ Elements of the item list are:
     (define-key map "g" 'revert-buffer)
 
     (setq sqlite3-mode-map map)))
+
+(defconst sqlite3-mode-menu-spec
+  '(
+    ["Toggle View Binary/Sqlite3" sqlite3-mode-toggle-view t]
+    ["Discard Changes" sqlite3-mode-rollback t]
+    ["Save Changes" sqlite3-mode-commit-changes t]
+    ["Send Query" sqlite3-mode-send-sql t]
+    ["Revert Buffer" revert-buffer t]
+    ))
 
 (defcustom sqlite3-mode-hook nil
   "Hook called enter the `sqlite3-mode'."
@@ -1347,6 +1359,46 @@ if you want."
     (define-key map "%c" 'sqlite3-table-mode-clear-filter)
 
     (setq sqlite3-table-mode-map map)))
+
+(defconst sqlite3-table-mode-menu-spec
+  `("Sqlite3"
+    ,@sqlite3-mode-menu-spec
+    ["Schema View" sqlite3-mode-open-schema-mode t]
+    ["Cell View" sqlite3-table-mode-view-cell t]
+    "---"
+    ("Edit"
+     ["Edit Cell" sqlite3-table-mode-start-edit t]
+     ["Add Row" sqlite3-table-mode-add-row t]
+     ["Delete Row" sqlite3-table-mode-delete-row t]
+     ["Copy Value" sqlite3-table-mode-copy-cell t]
+     ["Paste Value" sqlite3-table-mode-paste-cell t]
+     )
+    ("Paging"
+     ["Forward Page" sqlite3-table-mode-forward-page t]
+     ["Backward Page" sqlite3-table-mode-backward-page t]
+     ["Jump to Page" sqlite3-table-mode-jump-to-page t]
+     )
+    ("Display"
+     ["Shrink Column" sqlite3-table-mode-shrink-column t]
+     ["Widen Column" sqlite3-table-mode-widen-column t]
+     ["Sort" sqlite3-table-mode-easy-sort t]
+     ["Clear Sort" sqlite3-table-mode-clear-sort t]
+     ["Filter" sqlite3-table-mode-easy-filter t]
+     ["Clear Filter" sqlite3-table-mode-clear-filter t]
+     )
+    ("Cursor"
+     ["Forward Cell" sqlite3-table-mode-forward-cell t]
+     ["Backward Cell" sqlite3-table-mode-backward-cell t]
+     ["Previous Column" sqlite3-table-mode-previous-column t]
+     ["Next Column" sqlite3-table-mode-next-column t]
+     ["Previous Row" sqlite3-table-mode-previous-row t]
+     ["Next Row" sqlite3-table-mode-next-row t]
+     )))
+
+(easy-menu-define sqlite3-table-mode-menu
+  sqlite3-table-mode-map
+  "Menu used in Sqlite3 table mode."
+  sqlite3-table-mode-menu-spec)
 
 (defvar sqlite3-table-mode--context nil)
 (make-variable-buffer-local 'sqlite3-table-mode--context)
@@ -2506,6 +2558,19 @@ if you want."
 
     (setq sqlite3-schema-mode-map map)))
 
+(defconst sqlite3-schema-mode-menu-spec
+  `("Sqlite3"
+    ,@sqlite3-mode-menu-spec
+    ["View table" sqlite3-schema-mode-open-table t]
+    ["Open/Close item" sqlite3-schema-mode-toggle-item t]
+    ["Copy DDL" sqlite3-schema-mode-create-definition t]
+    ))
+
+(easy-menu-define sqlite3-schema-mode-menu
+  sqlite3-schema-mode-map
+  "Menu used in Sqlite3 schema mode."
+  sqlite3-schema-mode-menu-spec)
+
 (define-derived-mode sqlite3-schema-mode sqlite3-mode "Sqlite3 Schema"
   "Sqlite3 schema view mode"
   (use-local-map sqlite3-schema-mode-map)
@@ -2781,9 +2846,11 @@ if you want."
 (defun sqlite3-mode-toggle-view ()
   "Toggle sqlite3 view <-> binary view"
   (interactive)
-  (if sqlite3-binary-mode
-      (sqlite3-view)
-    (sqlite3-binary-view)))
+  (cond
+   (sqlite3-binary-mode
+    (sqlite3-view))
+   (t
+    (sqlite3-binary-view))))
 
 (defun sqlite3-binary-view ()
   (let ((magic-mode-alist
@@ -2793,6 +2860,7 @@ if you want."
                         elt))
                     magic-mode-alist)))
         (read-only buffer-read-only))
+    ;; warn if file is too huge and may exit.
     (find-alternate-file buffer-file-name)
     (when read-only
       (setq buffer-read-only t))

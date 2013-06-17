@@ -77,32 +77,25 @@ Following sqlite3 specific directive:
             (setq result (cons s result))))))
       result)))
 
+(defun sqlite3-helm-match-function (cand)
+  (string-match (sqlite3-helm-glob-to-regexp helm-pattern) cand))
+
 (defun sqlite3-helm-invoke-command (file query)
   "Initialize async locate process for `helm-source-locate'."
   ;; sqlite3-helm implementation ignore NULL. (NULL is same as a empty string)
   (let ((proc (sqlite3-start-csv-process file query "")))
-    (set-process-sentinel
-     proc
-     (lambda (proc event)
-       ;;TODO incomplete-line
-       (when (memq (process-status proc) '(exit signal))
-         (let ((source (cdr (assq proc helm-async-processes))))
-           (logger-info "%s" (assoc-default 'incomplete-line source))
-           (with-helm-window
-             (setq mode-line-format
-                   '(" " mode-line-buffer-identification " "
-                     (line-number-mode "%l") " "
-                     (:eval (propertize
-                             (format "[Sqlite3 Process Finish- (%s results)]"
-                                     ;;TODO count-line count all of sources.
-                                     (max (1- (count-lines
-                                               (point-min) (point-max))) 0))
-                             'face 'sqlite3-helm-finish))))
-             (force-mode-line-update))
-           (unless (zerop (process-exit-status proc))
-             (helm-log "Error: sqlite3 %s"
-                       (replace-regexp-in-string "\n" "" event)))))))
+    (set-process-sentinel proc 'sqlite3-helm--process-sentinel)
     proc))
+
+(defun sqlite3-helm--process-sentinel (proc event)
+  ;;TODO incomplete-line
+  (when (memq (process-status proc) '(exit signal))
+    (let ((source (cdr (assq proc helm-async-processes))))
+      ;;TODO
+      (logger-info "%s" (assoc-default 'incomplete-line source))
+      (unless (zerop (process-exit-status proc))
+        (helm-log "Error: sqlite3 %s"
+                  (replace-regexp-in-string "\n" "" event))))))
 
 (defun sqlite3-helm-hack-for-multiline (candidates)
   ;; helm split csv stream by newline. restore the csv and try
@@ -146,6 +139,19 @@ Following sqlite3 specific directive:
 ;;;
 ;;; Any utilities
 ;;;
+
+(defun sqlite3-helm-make-one-line (text &optional width)
+  "To display TEXT as a helm line."
+  (let ((oneline (replace-regexp-in-string "\n" " " text)))
+    (truncate-string-to-width oneline (or width (window-width)))))
+
+;;TODO regexp-quote
+(defun sqlite3-helm-glob-to-regexp (glob &optional escape-char)
+  (sqlite3--replace
+   glob
+   '((?* . ".*")                        ;TODO greedy?
+     (?? . ".?")
+     (?\\ (?* . "*") (?\? . "?") (?\\ . "\\")))))
 
 ;;;###autoload
 (defun sqlite3-helm-glob-to-like (glob &optional escape-char)
