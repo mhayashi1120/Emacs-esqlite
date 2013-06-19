@@ -27,30 +27,48 @@
           (should (equal
                    (sqlite3-stream-execute-query stream "SELECT * FROM hoge")
                    '(("12" "bz"))))
+          (should (sqlite3-stream-execute-sql stream "INSERT INTO hoge VALUES(3, 'あイｳ')"))
+          (should (equal
+                   (sqlite3-stream-execute-query stream "SELECT text FROM hoge WHERE id = 3")
+                   '(("あイｳ"))))
           )
-      (sqlite3-stream-close stream))))
+      (sqlite3-stream-close stream)
+      (delete-file db))))
 
 (ert-deftest sqlite3-normal-onetime-stream-0001 ()
   :tags '(sqlite3)
-  (let* ((db (make-temp-file "sqlite3-test-"))
-         (p1 (sqlite3-onetime-stream db "CREATE TABLE hoge (id);" (lambda (x)))))
-    (sqlite3-test-wait-exit p1)
-    (let ((query (mapconcat
-                  'identity
-                  (mapcar
-                   (lambda (n)
-                     (format "INSERT INTO hoge VALUES(%d);" n))
-                   '(1 2 3 4 5)) "")))
-      (let ((p2 (sqlite3-onetime-stream db query (lambda (x)))))
-        (sqlite3-test-wait-exit p2))
-      (let* ((result '())
-             (p (sqlite3-onetime-stream
-                 db "SELECT id FROM hoge;"
-                 (lambda (x)
-                   (unless (eq x :EOF)
-                     (setq result (cons (string-to-number (nth 0 x)) result)))))))
-        (sqlite3-test-wait-exit p)
-        (should (equal '(5 4 3 2 1) result))))))
+  (let ((db (make-temp-file "sqlite3-test-")))
+    (unwind-protect
+        (let ((p1 (sqlite3-onetime-stream db "CREATE TABLE hoge (id);" (lambda (x)))))
+          (sqlite3-test-wait-exit p1)
+          (let ((query (mapconcat
+                        'identity
+                        (mapcar
+                         (lambda (n)
+                           (format "INSERT INTO hoge VALUES(%d);" n))
+                         '(1 2 3 4 5)) "")))
+            (let ((p2 (sqlite3-onetime-stream db query (lambda (x)))))
+              (sqlite3-test-wait-exit p2))
+            (let* ((result '())
+                   (p (sqlite3-onetime-stream
+                       db "SELECT id FROM hoge;"
+                       (lambda (x)
+                         (unless (eq x :EOF)
+                           (setq result (cons (string-to-number (nth 0 x)) result)))))))
+              (sqlite3-test-wait-exit p)
+              (should (equal '(5 4 3 2 1) result)))))
+      (delete-file db))))
+
+(ert-deftest sqlite3-normal-onetime-stream-0002 ()
+  :tags '(sqlite3)
+  (let ((db (make-temp-file "sqlite3-test-")))
+    (unwind-protect
+        (progn
+          (sqlite3-onetime-query db "CREATE TABLE hoge (id, text);")
+          (sqlite3-onetime-query db "INSERT INTO hoge VALUES (1, 'あイｳ');")
+          (should (equal (sqlite3-onetime-query db "SELECT text FROM hoge WHERE id = 1")
+                         '(("あイｳ")))))
+      (delete-file db))))
 
 (ert-deftest sqlite3-irregular-0001 ()
   :tags '(sqlite3)
