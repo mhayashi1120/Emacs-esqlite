@@ -75,7 +75,7 @@
 (defcustom sqlite3-use-highlight-line t
   "Use `hl-line-mode' or not."
   :type 'boolean
-  :group 'sqlite3)
+  :group 'sqlite3-mode)
 
 (defface sqlite3-header-background
   '((((type x w32 mac ns) (class color))
@@ -83,37 +83,37 @@
     (((class color))
      (:background "white" :foreground "black")))
   "Face to fontify background of header line."
-  :group 'sqlite3)
+  :group 'sqlite3-mode)
 
 (defface sqlite3-selected-face
   '((t (:inherit mode-line-highlight)))
   "Face for highlighting current cell."
-  :group 'sqlite3)
+  :group 'sqlite3-mode)
 
 (defface sqlite3-error-line-face
   '((t (:inherit isearch-fail)))
   "Face for highlighting failed part in changing row."
-  :group 'sqlite3)
+  :group 'sqlite3-mode)
 
 (defface sqlite3-null-face
   '((t (:inherit font-lock-keyword-face)))
   "Face for any NULL."
-  :group 'sqlite3)
+  :group 'sqlite3-mode)
 
 (defface sqlite3-mode-object-face
   '((t (:inherit font-lock-function-name-face)))
   "Face to fontify sqlite3 object."
-  :group 'sqlite3)
+  :group 'sqlite3-mode)
 
 (defface sqlite3-mode-table-face
   '((t (:inherit sqlite3-mode-object-face)))
   "Face to fontify sqlite3 table."
-  :group 'sqlite3)
+  :group 'sqlite3-mode)
 
 (defface sqlite3-mode-column-face
   '((t (:inherit font-lock-variable-name-face)))
   "Face to fontify sqlite3 table column."
-  :group 'sqlite3)
+  :group 'sqlite3-mode)
 
 (defvar sqlite3-mode-map nil)
 
@@ -142,27 +142,27 @@
 
 (defcustom sqlite3-mode-hook nil
   "Hook called enter the `sqlite3-mode'."
-  :group 'sqlite3
+  :group 'sqlite3-mode
   :type 'hook)
 
 (defcustom sqlite3-mode-before-transaction-hook nil
   "Run before transaction is started."
-  :group 'sqlite3
+  :group 'sqlite3-mode
   :type 'hook)
 
 (defcustom sqlite3-mode-after-commit-hook nil
   "Run after transaction is commit. "
-  :group 'sqlite3
+  :group 'sqlite3-mode
   :type 'hook)
 
 (defcustom sqlite3-mode-after-rollback-hook nil
   "Run after transaction is rollback. "
-  :group 'sqlite3
+  :group 'sqlite3-mode
   :type 'hook)
 
 (defcustom sqlite3-mode-after-transaction-hook nil
   "Run after transaction is finished. (commit / rollback)"
-  :group 'sqlite3
+  :group 'sqlite3-mode
   :type 'hook)
 
 (defvar sqlite3-mode--context nil)
@@ -554,6 +554,11 @@ if you want."
 (defvar sqlite3-table-mode--context nil)
 (make-variable-buffer-local 'sqlite3-table-mode--context)
 
+(defvar sqlite3-table-mode--popup-timer nil)
+
+(defvar sqlite3-table-mode--highlight-overlay nil)
+(make-variable-buffer-local 'sqlite3-table-mode--highlight-overlay)
+
 (define-derived-mode sqlite3-table-mode sqlite3-mode "Sqlite3 Table"
   "Sqlite3 table view mode"
   ;;TODO clear when schema-view
@@ -863,8 +868,6 @@ if you want."
           (goto-char pos)
           (sqlite3-table-mode--replace-current-cell new))))))
 
-(defvar sqlite3-table-mode--popup-timer nil)
-
 (defun sqlite3-table-mode--cleanup-timer ()
   (when sqlite3-table-mode--popup-timer
     (loop for b in (buffer-list)
@@ -908,6 +911,7 @@ if you want."
   (let ((buf (get-buffer-create sqlite3-table-mode--cell-buffer)))
     (with-current-buffer buf
       (let ((inhibit-read-only t))
+        ;; todo split other func `sqlite3-cell-mode-prepare' ?
         (erase-buffer)
         (cond
          ((stringp value)
@@ -1031,16 +1035,17 @@ if you want."
       (while pos
         (let* ((cell (get-text-property pos 'sqlite3-mode-cell))
                (column0 (plist-get cell :column)))
-          (when (eq column column0)
+          ;;TODO it's ok? should be remove column/row model
+          (when (equal (plist-get column :name) (plist-get column0 :name))
             (throw 'done t))
           (setq pos (sqlite3-table-mode--next-cell t pos)))))
     (when pos
       (goto-char pos))))
 
-;;TODO make local variable?
+;; no need to make local
 (defvar sqlite3-table-mode--moved-column nil)
+
 (defun sqlite3-table-mode--move-line (arg)
-  ;;TODO at top of page after 2nd column type upward move point
   (let* ((cell (get-text-property (point) 'sqlite3-mode-cell))
          (column (plist-get cell :column))
          (colpos (if (memq last-command
@@ -1064,12 +1069,13 @@ if you want."
                (page (1+ (/ (abs rest) page-row)))
                (line (% rest page-row)))
           (funcall pager page)
+          ;; clear position of column.
+          (setq colpos nil)
           (forward-line line))))
     (setq sqlite3-table-mode--moved-column colpos)
-    (move-to-column colpos)
-    ;;TODO
-    ;; (sqlite3-table-mode--goto-column column)
-    ))
+    (if colpos
+        (move-to-column colpos)
+      (sqlite3-table-mode--goto-column column))))
 
 (defun sqlite3-table-mode--pre-command ()
   (condition-case err
@@ -1160,9 +1166,6 @@ if you want."
     (let ((value (sqlite3-table-mode-current-value)))
       (when value
         (sqlite3-table-mode--create-cell-buffer value)))))
-
-(defvar sqlite3-table-mode--highlight-overlay nil)
-(make-variable-buffer-local 'sqlite3-table-mode--highlight-overlay)
 
 (defun sqlite3-table-mode--highlight-selected ()
   (let ((ov (or sqlite3-table-mode--highlight-overlay
@@ -2044,6 +2047,7 @@ if you want."
   (use-local-map sqlite3-cell-mode-map))
 
 (defvar sqlite3-cell-mode--null nil)
+
 (defun sqlite3-cell-mode-toggle-null ()
   (interactive)
   (cond
