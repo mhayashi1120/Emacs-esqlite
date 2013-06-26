@@ -4,8 +4,6 @@
 ;; Keywords: data
 ;; URL: http://github.com/mhayashi1120/sqlite3.el/raw/master/sqlite3-helm.el
 ;; Emacs: GNU Emacs 24 or later
-;; Version: 0.0.0
-;; Package-Requires: ((sqlite3 "0.0.0"))
 
 ;; This program is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU General Public License as
@@ -68,8 +66,12 @@ http://www.sqlite.org/lang_select.html"
         (async (assoc 'sqlite3-async source)))
     (unless (stringp file)
       (error "sqlite3-db: Not a valid filename %s" file))
-    (unless (functionp composer)
+    ;;TODO test
+    (cond
+     ((and composer (not (functionp composer)))
       (error "sqlite3-composer: Not a valid function"))
+     ((and (null composer))
+      (setq composer (sqlite3-helm--construct-composer source))))
     (let ((result
            `((name . "sqlite3")
              (real-to-display
@@ -93,10 +95,10 @@ http://www.sqlite.org/lang_select.html"
              ;;TODO FIXME
              ;; (no-matchplugin)
              (match . identity)
-             ;; suppress disk i/o
+             ;; TODO: suppress disk i/o
              (delayed)
-             ;; 
-             (candidate-number-limit . 999)
+             ;; TODO: `helm-candidate-number-limit'
+             (candidate-number-limit . 100)
              (history . sqlite3-helm-history))))
       (dolist (s source)
         (let ((cell (assq (car-safe s) result)))
@@ -107,6 +109,25 @@ http://www.sqlite.org/lang_select.html"
             (setq result (cons s result))))))
       result)))
 
+;;TODO default behavior get table columns and fuzzy compare
+(defun sqlite3-helm--construct-composer (source)
+  (let ((table (assoc-default 'sqlite3-table source))
+        (column (assoc-default 'sqlite3-column source))
+        (limit (or (assoc-default 'candidate-number-limit source) 100)))
+    (unless (and table column limit)
+      (error "TODO: No"))
+    `(lambda ()
+       (concat
+        (format "SELECT %s" ,column)
+        (format " FROM  %s" ,table)
+        (format " WHERE ")
+        (format "%s LIKE %s "
+                ,column
+                (sqlite3-text
+                 (sqlite3-helm-fuzzy-glob-to-like helm-pattern)))
+        (format " ORDER BY %s" ,column)
+        (format " LIMIT %s" ,limit)))))
+
 (defun sqlite3-helm-match-function (cand)
   (string-match (sqlite3-helm-glob-to-regexp helm-pattern) cand))
 
@@ -114,7 +135,7 @@ http://www.sqlite.org/lang_select.html"
   (condition-case err
       (mapcar
        'sqlite3-helm--construct-row
-       (sqlite3-onetime-query file query))
+       (sqlite3-read file query))
     (error
      (helm-log "Error: sqlite3 %s"
                (replace-regexp-in-string

@@ -4,8 +4,6 @@
 ;; Keywords: data
 ;; URL: http://github.com/mhayashi1120/sqlite3.el/raw/master/sqlite3-mode.el
 ;; Emacs: GNU Emacs 24 or later
-;; Version: 0.0.0
-;; Package-Requires: ((sqlite3 "0.0.0"))
 
 ;; This program is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU General Public License as
@@ -277,6 +275,8 @@ if you want."
 (defun sqlite3-mode--after-kill-buffer ()
   (when (sqlite3-mode-ref :stream)
     (sqlite3-stream-close (sqlite3-mode-ref :stream)))
+  (when (sqlite3-mode-ref :schemaview)
+    (kill-buffer (sqlite3-mode-ref :schemaview)))
   (sqlite3-table-mode--cleanup-timer))
 
 ;;TODO separate mode-line-format each mode
@@ -401,15 +401,6 @@ if you want."
   (sqlite3-mode--check-stream)
   (let ((stream (sqlite3-mode-ref :stream)))
     (sqlite3-stream-execute-sql stream sql)))
-
-;;TODO
-(defun sqlite3-mode-query-2 (query)
-  (sqlite3-mode--check-stream)
-  (let ((stream (sqlite3-mode-ref :stream)))
-    (sqlite3-stream--send-command stream ".header 'ON'")
-    (unwind-protect
-        (sqlite3-mode-query query)
-      (sqlite3-stream--send-command stream ".header 'OFF'"))))
 
 (defun sqlite3-mode-redraw-page ()
   (cond
@@ -589,7 +580,7 @@ if you want."
   (interactive)
   (let ((value (sqlite3-table-mode-current-value)))
     (unless value
-      (user-error "No cell is here"))
+      (error "No cell is here"))
     (let ((buf (sqlite3-table-mode--create-cell-buffer value)))
       (display-buffer buf))))
 
@@ -760,7 +751,7 @@ if you want."
 
 (defun sqlite3-table-mode-clear-sort (&optional all)
   (interactive "P")
-    ;;TODO currently clear all
+  ;;TODO currently clear all
   (sqlite3-table-mode-set nil :source :orders)
   (sqlite3-table-mode-redraw-page))
 
@@ -1494,24 +1485,24 @@ if you want."
                                       (sqlite3-table-mode--construct-order-by orders)))
                          ""))
            (query (format
-                   ;;TODO not use * to use schema info
-                   (concat "SELECT %s, *"
+                   (concat "SELECT %s, %s"
                            " FROM %s"
                            " WHERE %s"
                            " %s"
                            " LIMIT %s OFFSET %s * %s")
                    rowid-name
+                   (mapconcat (lambda (x) (nth 1 x)) schema ",")
                    name where order-by
                    page-row page-row
                    page))
-           (data (sqlite3-mode-query-2 query)))
+           (data (sqlite3-mode-query query)))
       (cond
        (data
         (sqlite3-table-mode--clear-page)
-        (sqlite3-table-mode--set-header data schema)
+        (sqlite3-table-mode--set-header schema data)
         (let ((inhibit-read-only t))
           ;; ignore header row
-          (dolist (row (cdr data))
+          (dolist (row data)
             (sqlite3-table-mode--insert-row row)
             (insert "\n"))
           (unless(memq (sqlite3-mode-stream-status) '(transaction))
@@ -1527,7 +1518,7 @@ if you want."
         (plist-put source :page (1- (plist-get source :page))))
        (t
         (sqlite3-table-mode--clear-page)
-        (sqlite3-table-mode--set-header nil schema)
+        (sqlite3-table-mode--set-header schema)
         (sqlite3-table-mode-set 0 :view :max-page)
         (set-buffer-modified-p nil)))
       (sqlite3-table-mode-set source :source))))
@@ -1536,12 +1527,12 @@ if you want."
   (mapconcat
    (lambda (order)
      (destructuring-bind (column direction) order
-         (format "%s %s"
-                 column
-                 (cond
-                  ((eq direction :desc)
-                   "DESC")
-                  (t "ASC")))))
+       (format "%s %s"
+               column
+               (cond
+                ((eq direction :desc)
+                 "DESC")
+                (t "ASC")))))
    orders
    ", "))
 
@@ -1549,13 +1540,13 @@ if you want."
   ;;TODO
   )
 
-(defun sqlite3-table-mode--set-header (data &optional schema)
-  (let* ((lis (or data
-                  (list
-                   (cons
-                    "ROWID"                 ;dummy
-                    (loop for def in schema
-                          collect (nth 1 def))))))
+(defun sqlite3-table-mode--set-header (schema &optional data)
+  (let* ((lis (cons
+               (cons
+                "ROWID"                 ;dummy
+                (loop for def in schema
+                      collect (nth 1 def)))
+               data))
          (width-def (sqlite3-mode--calculate-width lis))
          (headers (car lis))
          (columns (loop for max in (cdr width-def)
@@ -1843,7 +1834,7 @@ if you want."
     (when to-buf
       (kill-buffer to-buf))
     (setq to-buf (generate-new-buffer
-               (format " *sqlite3 schema %s* " buffer-file-name)))
+                  (format " *sqlite3 schema %s* " buffer-file-name)))
     (sqlite3-mode-set :schemaview to-buf)
     (append-to-buffer to-buf (point-min) (point-max))
     (dolist (ov (overlays-in (point-min) (point-max)))
