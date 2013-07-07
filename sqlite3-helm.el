@@ -23,6 +23,7 @@
 ;;; Commentary:
 
 (require 'sqlite3)
+(require 'pcsv)
 
 (declare-function 'helm-log "helm")
 (declare-function 'helm-get-current-source "helm")
@@ -82,14 +83,14 @@ http://www.sqlite.org/lang_select.html"
                       (lambda ()
                         (sqlite3-helm-start-command
                          ,file
-                         (funcall ,composer helm-pattern))))
+                         (funcall ',composer helm-pattern))))
                      (candidate-transformer . sqlite3-helm-hack-for-multiline))
                  `((candidates
                     .
                     (lambda ()
                       (sqlite3-helm-call-command
                        ,file
-                       (funcall ,composer helm-pattern))))
+                       (funcall ',composer helm-pattern))))
                    ;; suppress caching
                    (volatile)))
              ;;TODO FIXME
@@ -135,7 +136,11 @@ http://www.sqlite.org/lang_select.html"
   (condition-case err
       (mapcar
        'sqlite3-helm--construct-row
-       (sqlite3-read file query))
+       (with-temp-buffer
+         (unless (zerop (sqlite3-call-csv-process file query ""))
+           (error "Process exited abnormally %s" (buffer-string)))
+         (goto-char (point-min))
+         (pcsv-parse-buffer)))
     (error
      (helm-log "Error: sqlite3 %s"
                (replace-regexp-in-string
