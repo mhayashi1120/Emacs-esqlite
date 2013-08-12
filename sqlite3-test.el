@@ -12,25 +12,25 @@
     (unwind-protect
         (progn
           (should (sqlite3-stream-execute-sql stream "CREATE TABLE hoge (id INTEGER PRIMARY KEY, text TEXT)"))
-          (should (equal (sqlite3-read-table-schema stream "hoge")
-                         '((0 "id" "INTEGER" nil :null t) (1 "text" "TEXT" nil :null nil))))
+          (should (equal '((0 "id" "INTEGER" nil :null t) (1 "text" "TEXT" nil :null nil))
+                         (sqlite3-read-table-schema stream "hoge")))
           (should (sqlite3-stream-execute-sql stream "INSERT INTO hoge VALUES (1, 'a')"))
           (should (sqlite3-stream-execute-sql stream "INSERT INTO hoge VALUES (2, 'b')"))
-          (should (equal (sqlite3-stream-read-query
-                          stream "SELECT * FROM hoge ORDER BY id")
-                         '(("1" "a") ("2" "b"))))
+          (should (equal '(("1" "a") ("2" "b"))
+                         (sqlite3-stream-read-query
+                          stream "SELECT * FROM hoge ORDER BY id")))
           (should (sqlite3-stream-execute-sql stream "UPDATE hoge SET id = id + 10, text = text || 'z'"))
           (should (equal
-                   (sqlite3-stream-read-query stream "SELECT * FROM hoge")
-                   '(("11" "az") ("12" "bz"))))
+                   '(("11" "az") ("12" "bz"))
+                   (sqlite3-stream-read-query stream "SELECT * FROM hoge")))
           (should (sqlite3-stream-execute-sql stream "DELETE FROM hoge WHERE id = 11"))
           (should (equal
-                   (sqlite3-stream-read-query stream "SELECT * FROM hoge")
-                   '(("12" "bz"))))
+                   '(("12" "bz"))
+                   (sqlite3-stream-read-query stream "SELECT * FROM hoge")))
           (should (sqlite3-stream-execute-sql stream "INSERT INTO hoge VALUES(3, 'あイｳ')"))
           (should (equal
-                   (sqlite3-stream-read-query stream "SELECT text FROM hoge WHERE id = 3")
-                   '(("あイｳ"))))
+                   '(("あイｳ"))
+                   (sqlite3-stream-read-query stream "SELECT text FROM hoge WHERE id = 3")))
           )
       (sqlite3-stream-close stream)
       (delete-file db))))
@@ -46,10 +46,11 @@
           (should-error (sqlite3-stream-execute-sql stream "CREATE TABLE hoge (id INTEGER PRIMARY KEY)"))
           (sqlite3-stream-execute-sql stream "INSERT INTO hoge VALUES (1)")
           (should-error (sqlite3-stream-execute-sql stream "INSERT INTO hoge VALUES (1)"))
-          (should (equal (sqlite3-stream-read-query stream "SELECT * FROM hoge") '(("1"))))
+          (should (equal '(("1")) (sqlite3-stream-read-query stream "SELECT * FROM hoge")))
           (should-error (sqlite3-stream-read-query stream "SELECT"))
           ;; works fine after syntax error
-          (should (equal (sqlite3-stream-read-query stream "SELECT * FROM hoge") '(("1")))))
+          (should (equal '(("1")) (sqlite3-stream-read-query stream "SELECT * FROM hoge")))
+          (should (sqlite3-file-guessed-database-p db)))
       (sqlite3-stream-close stream))))
 
 (ert-deftest sqlite3-async-read ()
@@ -82,13 +83,48 @@
         (progn
           (sqlite3-read db "CREATE TABLE hoge (id, text);")
           (sqlite3-read db "INSERT INTO hoge VALUES (1, 'あイｳ');")
-          (should (equal (sqlite3-read db "SELECT text FROM hoge WHERE id = 1")
-                         '(("あイｳ"))))
+          (should (equal '(("あイｳ")) (sqlite3-read db "SELECT text FROM hoge WHERE id = 1")))
           (should-error (sqlite3-read db "SELECT")))
       (delete-file db))))
 
+(ert-deftest sqlite3-reader-0001 ()
+  :tags '(sqlite3)
+  (let* ((db (make-temp-file "sqlite3-test-")))
+    (unwind-protect
+        (progn
+          (sqlite3-execute db "CREATE TABLE table1(a,b,c)")
+          (sqlite3-execute db "INSERT INTO table1 VALUES (1,'A', NULL)")
+          (sqlite3-execute db "INSERT INTO table1 VALUES (2,'B', NULL)")
+          (let ((reader (sqlite3-reader-open db "SELECT * FROM table1")))
+            (unwind-protect
+                (progn
+                  (should (sqlite3-reader-open-p reader))
+                  (should (equal '("1" "A" :null) (sqlite3-reader-read reader)))
+                  ;;TODO
+                  (should (equal '("2" "B" :null) (sqlite3-reader-peek reader)))
+                  (should (equal '("2" "B" :null) (sqlite3-reader-read reader)))
+                  (should (equal :EOF (sqlite3-reader-read reader)))
+                  (should-not (sqlite3-reader-open-p reader)))
+              (sqlite3-reader-close reader))))
+      (delete-file db))))
+
+(ert-deftest sqlite3-reader-0002 ()
+  :tags '(sqlite3)
+  (let* ((db (make-temp-file "sqlite3-test-")))
+    (unwind-protect
+        (progn
+          (sqlite3-execute db "CREATE TABLE table1(a,b,c)")
+          (sqlite3-execute db "INSERT INTO table1 VALUES (1,'A', NULL)")
+          (let ((reader (sqlite3-reader-open db "SELECT * FROM table1")))
+            (unwind-protect
+                (progn
+                  (should (sqlite3-reader-open-p reader))
+                  (sqlite3-reader-close reader)
+                  (should-not (sqlite3-reader-open-p reader)))
+              (sqlite3-reader-close reader)))))))
+
 ;;TODO reader test
-;;TODO sqlite3-call/
+;;TODO sqlite3-call/stream transaction
 
 (ert-deftest sqlite3-escape ()
   :tags '(sqlite3)
@@ -110,21 +146,35 @@
   (should (equal "\\0|%||" (sqlite3-helm-glob-to-like "\\\\0%|" ?\|)))
   (should (equal "\\\\0\\%|" (sqlite3-helm-glob-to-like "\\\\0%|" ?\\))))
 
-(ert-deftest sqlite3-fuzzy-glob-to-like ()
+(ert-deftest sqlite3-glob-to-fuzzy-like ()
   :tags '(sqlite3)
-  (should (equal "a%" (sqlite3-helm-fuzzy-glob-to-like "^a")))
-  (should (equal "%a%" (sqlite3-helm-fuzzy-glob-to-like "a")))
-  (should (equal "%a" (sqlite3-helm-fuzzy-glob-to-like "a$")))
-  (should (equal "%^a%" (sqlite3-helm-fuzzy-glob-to-like "\\^a")))
-  (should (equal "%a$%" (sqlite3-helm-fuzzy-glob-to-like "a\\$")))
-  (should (equal "%a\\\\" (sqlite3-helm-fuzzy-glob-to-like "a\\\\$")))
+  (should (equal "a%" (sqlite3-helm-glob-to-fuzzy-like "^a")))
+  (should (equal "%a%" (sqlite3-helm-glob-to-fuzzy-like "a")))
+  (should (equal "%a" (sqlite3-helm-glob-to-fuzzy-like "a$")))
+  (should (equal "%^a%" (sqlite3-helm-glob-to-fuzzy-like "\\^a")))
+  (should (equal "%a$%" (sqlite3-helm-glob-to-fuzzy-like "a\\$")))
+  (should (equal "%a\\\\" (sqlite3-helm-glob-to-fuzzy-like "a\\\\$")))
+  (should (equal "%\\$%" (sqlite3-helm-glob-to-fuzzy-like "\\\\$" ?a)))
   )
+
+(ert-deftest sqlite3-glob-to-fuzzy-like ()
+  :tags '(sqlite3)
+  (should (equal "a*" (sqlite3-helm-glob-to-fuzzy-glob "^a")))
+  (should (equal "*a*" (sqlite3-helm-glob-to-fuzzy-glob "a")))
+  (should (equal "*a" (sqlite3-helm-glob-to-fuzzy-glob "a$"))))
 
 (ert-deftest sqlite3-format ()
   :tags '(sqlite3)
   ;;TODO error test
 
   (should (equal
+           (concat
+            "SELECT "
+            "\"a\", \"b\",\"c\",'''text','something'"
+            " FROM \"table\""
+            " WHERE"
+            " \"d\" LIKE 'hoge' ESCAPE '\\' "
+            " AND col2 IN ('foo', 1)")
            (let ((search-text "hoge"))
              (sqlite3-format
               "SELECT %O,%o,%T,%V FROM %o WHERE %o LIKE %L{search-text} AND col2 IN (%V)"
@@ -132,20 +182,13 @@
               "c" "'text"
               "something"
               "table"
-              "d" '("foo" 1)))
-           (concat
-            "SELECT "
-            "\"a\", \"b\",\"c\",'''text','something'"
-            " FROM \"table\""
-            " WHERE"
-            " \"d\" LIKE 'hoge' ESCAPE '\\' "
-            " AND col2 IN ('foo', 1)")))
+              "d" '("foo" 1)))))
   (should (equal
+           (concat
+            "INSERT INTO (\"a\", \"b\")\n"
+            " VALUES ('1', 2) ")
            (sqlite3-format
             '(
               "INSERT INTO (%O)"
               " VALUES (%V) ")
-            '("a" "b") '("1" 2))
-           (concat
-            "INSERT INTO (\"a\", \"b\")\n"
-            " VALUES ('1', 2) "))))
+            '("a" "b") '("1" 2)))))

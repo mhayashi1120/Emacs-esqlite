@@ -2,8 +2,10 @@
 
 ;; Author: Masahiro Hayashi <mhayashi1120@gmail.com>
 ;; Keywords: data
-;; URL: http://github.com/mhayashi1120/sqlite3.el/raw/master/sqlite3-helm.el
+;; URL: https://github.com/mhayashi1120/sqlite3.el/raw/master/sqlite3-helm.el
 ;; Emacs: GNU Emacs 24 or later
+;; Package-Requires: ((sqlite3 "0.0.1"))
+;; Version: 0.0.1
 
 ;; This program is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU General Public License as
@@ -22,9 +24,19 @@
 
 ;;; Commentary:
 
+;;; TODO:
+;; * GLOB syntax is greater than LIKE syntax
+;;   http://pokutuna.hatenablog.com/entry/20111113/1321126659
+
+;;; Code:
+
+(eval-when-compile
+  (require 'cl))
+
 (require 'sqlite3)
 (require 'pcsv)
 
+;;TODO package-requires helm
 (declare-function 'helm-log "helm")
 (declare-function 'helm-get-current-source "helm")
 
@@ -46,7 +58,7 @@ Normally, should not override `candidates-process', `candidates',
  `candidate-transformer' directive.
 
 Following sqlite3 specific directive:
-`sqlite3-db' File name of sqlite3 database.
+`sqlite3-db' File name of sqlite3 database or sqlite3 stream. 
 `sqlite3-composer' Function which accept one argument `helm-pattern' and return
     a sql query string.
 `sqlite3-async' Indicate SOURCE is async.
@@ -62,11 +74,17 @@ If SOURCE don't contain `sqlite3-async', you should add LIMIT statement
  to SQL which composed by `sqlite3-composer'.
  See the syntax of LIMIT statement.
 http://www.sqlite.org/lang_select.html"
-  (let ((file (assoc-default 'sqlite3-db source))
+  (let ((file-or-stream (assoc-default 'sqlite3-db source))
         (composer (assoc-default 'sqlite3-composer source))
-        (async (assoc 'sqlite3-async source)))
-    (unless (stringp file)
-      (error "sqlite3-db: Not a valid filename %s" file))
+        (async (assoc 'sqlite3-async source))
+        file stream)
+    (cond
+     ((stringp file-or-stream)
+      (setq file file-or-stream))
+     ((sqlite3-stream-p file-or-stream)
+      (setq stream file-or-stream))
+     (t
+      (error "sqlite3-db: Not a valid filename or stream %s" file)))
     ;;TODO test
     (cond
      ((and composer (not (functionp composer)))
@@ -74,17 +92,28 @@ http://www.sqlite.org/lang_select.html"
      ((and (null composer))
       (setq composer (sqlite3-helm--construct-composer source))))
     (let ((result
-           `((name . "sqlite3")
-             (real-to-display
-              . (lambda (c) (sqlite3-helm-make-one-line (nth 0 c))))
-             ,@(if async
-                   `((candidates-process
-                      .
-                      (lambda ()
-                        (sqlite3-helm-start-command
-                         ,file
-                         (funcall ',composer helm-pattern))))
-                     (candidate-transformer . sqlite3-helm-hack-for-multiline))
+           ;; dequote all cdr to `cons' the list
+           `((name . ,"sqlite3")
+             (real-to-display . ,'sqlite3-helm-make-one-line)
+             ,@(cond
+                (stream
+                 `((candidates
+                    .
+                    (lambda ()
+                      (sqlite3-helm-call-stream
+                       ,stream
+                       (funcall ',composer helm-pattern))))
+                   ;; suppress caching
+                   (volatile)))
+                (async
+                 `((candidates-process
+                    .
+                    (lambda ()
+                      (sqlite3-helm-start-command
+                       ,file
+                       (funcall ',composer helm-pattern))))
+                   (candidate-transformer . sqlite3-helm-hack-for-multiline)))
+                (t
                  `((candidates
                     .
                     (lambda ()
@@ -92,15 +121,13 @@ http://www.sqlite.org/lang_select.html"
                        ,file
                        (funcall ',composer helm-pattern))))
                    ;; suppress caching
-                   (volatile)))
+                   (volatile))))
              ;;TODO FIXME
              ;; (no-matchplugin)
-             (match . identity)
-             ;; TODO: suppress disk i/o
-             (delayed)
+             (match . ,'identity)
              ;; TODO: `helm-candidate-number-limit'
-             (candidate-number-limit . 100)
-             (history . sqlite3-helm-history))))
+             (candidate-number-limit . ,100)
+             (history . ,'sqlite3-helm-history))))
       (dolist (s source)
         (let ((cell (assq (car-safe s) result)))
           (cond
@@ -111,26 +138,35 @@ http://www.sqlite.org/lang_select.html"
       result)))
 
 ;;TODO default behavior get table columns and fuzzy compare
+;;TODO unit test
 (defun sqlite3-helm--construct-composer (source)
   (let ((table (assoc-default 'sqlite3-table source))
         (column (assoc-default 'sqlite3-column source))
-        (limit (or (assoc-default 'candidate-number-limit source) 100)))
+        (limit (or (assoc-default 'candidate-number-limit source) 100))
+        (likepat (sqlite3-helm-glob-to-fuzzy-like helm-pattern)))
     (unless (and table column limit)
       (error "TODO: No"))
     `(lambda ()
-       (concat
-        (format "SELECT %s" ,column)
-        (format " FROM  %s" ,table)
-        (format " WHERE ")
-        (format "%s LIKE %s "
-                ,column
-                (sqlite3-text
-                 (sqlite3-helm-fuzzy-glob-to-like helm-pattern)))
-        (format " ORDER BY %s" ,column)
-        (format " LIMIT %s" ,limit)))))
+       (sqlite3-format
+        '("SELECT %o{column}"
+          " FROM  %o{table}"
+          " WHERE %o{column} LIKE %T{likepat} ESCAPE '\\'"
+          " ORDER BY %o{column}"
+          " LIMIT %s{limit}")))))
 
 (defun sqlite3-helm-match-function (cand)
   (string-match (sqlite3-helm-glob-to-regexp helm-pattern) cand))
+
+(defun sqlite3-helm-call-stream (stream query)
+  (condition-case err
+      (mapcar
+       'sqlite3-helm--construct-row
+       (sqlite3-stream-read-query stream query))
+    (error
+     (helm-log "Error: sqlite3 %s"
+               (replace-regexp-in-string
+                "\n" ""
+                (prin1-to-string (cdr err)))))))
 
 (defun sqlite3-helm-call-command (file query)
   (condition-case err
@@ -210,9 +246,15 @@ http://www.sqlite.org/lang_select.html"
 ;;; Any utilities
 ;;;
 
-(defun sqlite3-helm-make-one-line (text &optional width)
+(defun sqlite3-helm-make-one-line (row &optional width)
   "To display TEXT as a helm line."
-  (let ((oneline (replace-regexp-in-string "\n" " " text)))
+  (let* ((text (mapconcat (lambda (x)
+                            (cond
+                             ((stringp x) x)
+                             ((eq x :null) "")
+                             (t "")))
+                          row " "))
+         (oneline (replace-regexp-in-string "\n" " " text)))
     (truncate-string-to-width oneline (or width (window-width)))))
 
 ;;TODO regexp-quote
@@ -222,6 +264,36 @@ http://www.sqlite.org/lang_select.html"
    '((?* . ".*")                        ;TODO greedy?
      (?? . ".?")
      (?\\ (?* . "*") (?\? . "?") (?\\ . "\\")))))
+
+(defun sqlite3-helm-split-fuzzy-glob (glob &optional escape-char)
+  (let (prefix suffix)
+    (cond
+     ((string-match "\\`\\^" glob)
+      (setq glob (substring glob 1)))
+     ((string-match "\\`\\\\\\^" glob)
+      ;; escaped ^.
+      (setq glob (substring glob 1)
+            prefix t))
+     (t
+      (setq prefix t)))
+    (cond
+     ((and (eq escape-char ?\\)
+           (string-match "\\`\\(?:\\\\.\\|[^\\\\]\\)*\\\\$\\'" glob))
+      ;; end with escaped `$'.
+      ;; consider "\\$" <- escaped backslash end with `$'
+      (setq glob (concat (substring glob 0 -2) "$"))
+      (setq suffix t))
+     ((and (not (eq escape-char ?\\))
+           ;; end with escaped `$' "\\$"
+           (string-match "\\\\\\$\\'" glob))
+      (setq glob (concat (substring glob 0 -2) "$"))
+      (setq suffix t))
+     ((string-match "\\$\\'" glob)
+      ;; end of non-escaped `$'
+      (setq glob (substring glob 0 -1)))
+     (t
+      (setq suffix t)))
+    (list prefix glob suffix)))
 
 ;;;###autoload
 (defun sqlite3-helm-glob-to-like (glob &optional escape-char)
@@ -248,42 +320,36 @@ e.g. hoge*foo -> hoge%foo
                '((?\\ . "\\"))))))))
 
 ;;;###autoload
-(defun sqlite3-helm-fuzzy-glob-to-like (glob &optional escape-char)
+(defun sqlite3-helm-glob-to-fuzzy-like (glob &optional escape-char)
   "Convert pseudo GLOB to like syntax to support helm behavior.
 
 Following extended syntax:
 
-`^' Like regexp, match to start of text.
-`$' Like regexp, match to end of text.
+`^': Like regexp, match to start of text.
+`$': Like regexp, match to end of text.
 
 Above syntax can escape by \\ (backslash). But no relation to ESCAPE-CHAR.
 See related information at `sqlite3-escape-like'.
 
-If no `^' and `$' are presant, make fuzzy pattern to searching text.
-
 ESCAPE-CHAR pass to `sqlite3-helm-glob-to-like'"
-  (let (prefix suffix pattern)
-    (cond
-     ((string-match "\\`\\^" glob)
-      (setq glob (substring glob 1)))
-     ((string-match "\\`\\\\\\^" glob)
-      ;; escaped ^.
-      (setq glob (substring glob 1)
-            prefix "%"))
-     (t
-      (setq prefix "%")))
-    (cond
-     ((string-match "\\`\\(\\\\.\\|[^\\\\]\\)*\\\\$\\'" glob)
-      ;; Match to end of escaped end of `$'
-      (setq glob (concat (substring glob 0 -2) "$"))
-      (setq suffix "%"))
-     ((string-match "\\$\\'" glob)
-      ;; end of non-escaped `$'
-      (setq glob (substring glob 0 -1)))
-     (t
-      (setq suffix "%")))
-    (setq pattern (sqlite3-helm-glob-to-like glob escape-char))
-    (concat prefix pattern suffix)))
+  (destructuring-bind (prefix pattern suffix)
+      (sqlite3-helm-split-fuzzy-glob glob (or escape-char ?\\))
+    (concat
+     (and prefix "%")
+     (sqlite3-helm-glob-to-like pattern escape-char)
+     (and suffix "%"))))
+
+;;;###autoload
+(defun sqlite3-helm-glob-to-fuzzy-glob (glob)
+  "Convert GLOB to fuzzy glob to support helm behavior
+
+There are extended syntax `^' `$'. See `sqlite3-helm-glob-to-fuzzy-like'."
+  (destructuring-bind (prefix pattern suffix)
+      (sqlite3-helm-split-fuzzy-glob glob)
+    (concat
+     (and prefix "*")
+     pattern
+     (and suffix "*"))))
 
 (provide 'sqlite3-helm)
 

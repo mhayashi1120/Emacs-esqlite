@@ -37,4 +37,63 @@
   (should (> (/ sqlite3-dev-try-count 2) overcount))
   (list overcount rates))
 
+
+;; some of GUI tool query planner
   
+(defun sqlite3-planner-mode ()
+  )
+
+(defun sqlite3-planner (file sql)
+  (let ((explain (sqlite3-read
+                  file (format "EXPLAIN %s" sql)
+                  "-header"))
+        (plan (sqlite3-read
+               file (format "EXPLAIN QUERY PLAN %s" sql)
+               "-header"))
+        ;;TODO
+        (stats (sqlite3-read
+                file sql
+                "-stats")))
+    (list explain plan stats)))
+
+
+;;;
+;;; signal support
+;;;
+
+;;TODO remove until future
+(defvar sqlite3--signal-support 'unknown)
+
+(when (eq sqlite3--signal-support 'unknown)
+  (ignore-errors
+    (let* ((file (make-temp-file "emacs-sqlite3-"))
+           (process (sqlite3-start-csv-process file "SELECT 1")))
+      (unwind-protect
+          (progn
+            (and
+             ;; suspend
+             (prog1 (eq (signal-process process 'stop) 0)
+               (sleep-for 0.1))
+             ;; check status
+             (eq (process-status process) 'stop)
+             ;; continue
+             (prog1 (eq (signal-process process 'cont) 0)
+               (sleep-for 0.1))
+             ;; re-check status
+             (eq (process-status process) 'run)
+             (setq sqlite3--signal-support 'support)))
+        (delete-process process)
+        (kill-buffer (process-buffer process))
+        (delete-file file)))))
+
+(defun sqlite3-stream-suspend (stream)
+  ;; TODO  SIGSTOP
+  (signal-process stream 19))
+
+(defun sqlite3-stream-continue (stream)
+  ;; TODO  SIGCONT
+  (signal-process stream 18))
+
+;; TODO I can't get clue.
+;;    esh-proc.el: eshell-continue-process, eshell-stop-process says stop status is not yet supported.
+

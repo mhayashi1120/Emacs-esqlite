@@ -2,8 +2,10 @@
 
 ;; Author: Masahiro Hayashi <mhayashi1120@gmail.com>
 ;; Keywords: data
-;; URL: http://github.com/mhayashi1120/sqlite3.el/raw/master/sqlite3.el
+;; URL: https://github.com/mhayashi1120/sqlite3.el/raw/master/sqlite3.el
 ;; Emacs: GNU Emacs 24 or later
+;; Package-Requires: ((pcsv "1.3.3"))
+;; Version: 0.0.1
 
 ;; This program is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU General Public License as
@@ -24,11 +26,6 @@
 
 ;; TODO
 
-;; * save-all-buffers...
-;; * Specification
-;; allow invalid character in data.
-;; disallow invalid character in column and table.
-
 ;;; Install:
 
 ;; (autoload 'sqlite3-file-guessed-database-p "sqlite3"
@@ -39,8 +36,6 @@
 ;; * describe about :null
 
 ;;; Code:
-
-;;TODO when table is locked
 
 (eval-when-compile
   (require 'cl))
@@ -135,31 +130,44 @@ Please download and install fakecygpty (Google it!!)"
 ;;
 
 (defun sqlite3--temp-null (query)
-  (loop with key = (format "%s:%s" (current-time) query)
-        with hash = (md5 key)
-        for i from 0 below (length hash) by 2
-        ;; make random unibyte string
-        concat (let* ((hex (substring hash i (+ i 2)))
-                      (c (string-to-number hex 16)))
-                 (char-to-string c))
-        into res
-        finally return
-        ;; md5 hex fold to base64 area
-        (let ((b64 (base64-encode-string res t)))
-          ;; sqlite3 command nullvalue assigned to 20 chars (19 + null).
-          (substring b64 0 19))))
+  ;; sqlite3 command nullvalue assigned to 20 chars (19 + null).
+  (sqlite3--random-text query 19))
 
-(defun sqlite3--temp-name (objects prefix)
-  (loop with name = (concat prefix "_backup")
-        with v = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-        while (member name objects)
-        do (setq name
-                 (concat prefix
-                         "_backup_"
-                         (loop repeat 8
-                               collect (aref v (random 62)) into res
-                               finally return (concat res))))
-        finally return name))
+;; * random char restrict to `a-zA-Z0-9+/' (except last `=')
+;; * md5 have 16 bytes
+;; * base64 encode 16 bytes -> 44 chars
+;; * to trim last `=', only use md5 first 15 bytes make (* 4 (/ 15 3)) 20 bytes
+(defun sqlite3--random-text (seed length)
+  (loop for i from 0 to (/ (1- length) 20)
+        concat (md5 (format "%d:%s:%s" i (current-time) seed))
+        into hash
+        finally return
+         ;; only first 15 bytes
+        (loop for i from 0 below (- (length hash) 2) by 2
+              ;; make random unibyte string
+              collect (let ((hex (substring hash i (+ i 2))))
+                        (string-to-number hex 16))
+              into res
+              finally return
+              ;; md5 hex fold to base64 area
+              (let* ((unibytes (apply 'unibyte-string res))
+                     (b64 (base64-encode-string unibytes t)))
+                (substring b64 0 length)))))
+
+(defun sqlite3--unique-name (stream prefix &optional seed)
+  (loop with objects = (sqlite3-read--objects stream)
+        with full-name
+        while (let ((random-text (sqlite3--random-text (or seed "") 40)))
+                (setq full-name (format "%s_%s" prefix random-text))
+                (member full-name objects))
+        finally return full-name))
+
+(defun sqlite3-terminate-command (command)
+  (cond
+   ((not (string-match "\n\\'" command))
+    (concat command "\n"))
+   (t
+    command)))
 
 (defun sqlite3-terminate-statement (sql)
   (cond
@@ -296,7 +304,6 @@ This form check syntax error report from sqlite3 command."
            (process-put proc 'sqlite3-syntax-error (or errmsg t))))
        ,@form)))
 
-;; TODO should accept signal when too many output?
 (defun sqlite3-start-process (buffer &rest args)
   (sqlite3--with-env
    (let ((cmdline (cons sqlite3-program args))
@@ -387,7 +394,6 @@ Cygwin: FILE contains multibyte char, may fail to open FILE as database."
   (and (looking-at "^Error: \\(.*\\)")
        (format "Sqlite3 Error: %s" (match-string 1))))
 
-;;TODO rename or some of caller function
 (defun sqlite3--maybe-raise-syntax-error (proc)
   (while (and (eq (process-status proc) 'run)
               (not (sqlite3-prompt-p))
@@ -396,25 +402,11 @@ Cygwin: FILE contains multibyte char, may fail to open FILE as database."
   (when (stringp (process-get proc 'sqlite3-syntax-error))
     (error "%s" (process-get proc 'sqlite3-syntax-error))))
 
-(defconst sqlite3--signal-support-p
-  (let* ((file (make-temp-file "emacs-sqlite3-"))
-         (process (sqlite3-start-csv-process file "SELECT 1")))
-    (unwind-protect
-        (progn
-          (and
-           ;; suspend
-           (eq (signal-process process 19) 0)
-           ;; continue
-           (eq (signal-process process 18) 0)))
-      (delete-process process)
-      (kill-buffer (process-buffer process))
-      (delete-file file))))
-
 ;;
 ;; read csv from sqlite3
 ;;
 
-(defun sqlite3--read-csv-line ()
+(defun sqlite3--read-csv-line (&optional null)
   (let ((first (point))
         (line (pcsv-read-line)))
     ;; end of line is not a newline.
@@ -422,16 +414,16 @@ Cygwin: FILE contains multibyte char, may fail to open FILE as database."
     (unless (bolp)
       (goto-char first)
       (signal 'invalid-read-syntax nil))
-    line))
-
-(defun sqlite3--read-csv-line-with-deletion (null)
-  (let ((start (point))
-        (row (sqlite3--read-csv-line)))
-    (delete-region start (point))
-    (loop for datum in row
+    (loop for datum in line
           collect (if (equal datum null)
                       :null
                     datum))))
+
+(defun sqlite3--read-csv-line-with-deletion (null)
+  (let ((start (point))
+        (row (sqlite3--read-csv-line null)))
+    (delete-region start (point))
+    row))
 
 (defun sqlite3--read-csv-with-deletion (null)
   "Read csv data from current point.
@@ -491,24 +483,18 @@ Delete csv data if reading was succeeded."
     ("O" . (lambda (l)
              (mapconcat (lambda (x) (sqlite3-format-object x))
                         l ", ")))
-    ;; some value (string, number, list)
+    ;; some value (string, number, list) with properly quoted
     ("V" . sqlite3-format-value)
     ))
 
-;; format directive is reference from sqlite C level api. (e.g. sqlite_mprintf)
-;; suffix format is some alphabet char.
-;;     lowcase todo
-;;     upcase todo
-
-;;TODO refine imp
 ;;;###autoload
-(defun sqlite3-format (fmt &rest objects)
-  "Prepare sql by FMT like `format' with extension.
+(defun sqlite3-format (sqlite3-fmt &rest sqlite3-objects)
+  "Prepare sql with FMT like `format'.
 
 FMT is a string or list of string.
  each list item join with newline.
 
-Each directive accept arg which contain variable name.
+Each directive accept arg which contains variable name.
 e.g.
 \(let ((some-var \"FOO\")) (sqlite3-format \"%s %s{some-var}\" \"HOGE\"))
  => \"HOGE FOO\"
@@ -517,53 +503,70 @@ e.g.
 %t: escape text
 %T: same as %t but with quote
 %l: escape LIKE pattern escape char is '\\'
-%L: same as %l but with quote and with ESCAPE statement
+%L: similar to %l but with quoting/escaping and ESCAPE statement
 %o: escape db object with quote
 %O: escape db objects with quote (joined by \", \")
 %V: escape sql value(s) with quote if need
   (if list, joined by \", \" TODO about paren)
-"
+
+\(fn fmt &rest objects)"
   (with-temp-buffer
-    (when (listp fmt)
-      (setq fmt (mapconcat 'identity fmt "\n")))
-    (insert fmt)
+    (when (listp sqlite3-fmt)
+      (setq sqlite3-fmt (mapconcat 'identity sqlite3-fmt "\n")))
+    (insert sqlite3-fmt)
     (goto-char (point-min))
-    (while (search-forward "%" nil t)
-      (cond
-       ((eq (char-after) ?%)
-	(delete-char 1))
-       ((looking-at "\\(?:\\([a-zA-Z]\\)\\)\\(?:{\\(.+?\\)}\\)?")
-        (let* ((spec (match-string 1))
-               (varname (intern-soft (match-string 2)))
-	       (fn (assoc-default spec sqlite3-format--table))
-               obj)
-          ;; Delete formatter directive
-          (delete-region (1- (point)) (match-end 0))
-          (cond
-           (varname
-            (setq obj (symbol-value varname)))
-           (objects
-            (setq obj (car objects))
-            (setq objects (cdr objects)))
-           (t
-            (error "No value assigned to `%%%s'" spec)))
-	  (unless fn
-	    (error "Invalid format character: `%%%s'" spec))
-	  (unless (functionp fn)
-            (error "Assert"))
-          (let ((val obj)
-                text)
-            (setq text (funcall fn val))
-            (insert text))))))
-    (when objects
-      (error "args out of range %s" objects))
+    (let ((fmt-regexp
+           (concat
+            (regexp-opt (mapcar 'car sqlite3-format--table) t)
+            "\\(?:{\\(.+?\\)}\\)?"))
+          (case-fold-search nil))
+      (while (search-forward "%" nil t)
+        (cond
+         ((eq (char-after) ?%)
+          (delete-char 1))
+         ((looking-at fmt-regexp)
+          (let* ((spec (match-string 1))
+                 (varname (intern-soft (match-string 2)))
+                 (fn (assoc-default spec sqlite3-format--table))
+                 obj)
+            ;; Delete formatter directive
+            (delete-region (1- (point)) (match-end 0))
+            (cond
+             (varname
+              ;;TODO reconsider it e.g. `fmt-regexp' can't use here.
+              (setq obj (symbol-value varname)))
+             (sqlite3-objects
+              (setq obj (car sqlite3-objects))
+              (setq sqlite3-objects (cdr sqlite3-objects)))
+             (t
+              (error "No value assigned to `%%%s'" spec)))
+            (unless fn
+              (error "Invalid format character: `%%%s'" spec))
+            (unless (functionp fn)
+              (error "Assert"))
+            (let ((val obj)
+                  text)
+              (setq text (funcall fn val))
+              (insert text)))))))
+    (when sqlite3-objects
+      (error "args out of range %s" sqlite3-objects))
     (buffer-string)))
 
+;; http://www.sqlite.org/syntaxdiagrams.html#numeric-literal
+(defconst sqlite3-numeric-literal-regexp
+  (concat
+   "\\`"
+   "[+-]?"
+   "\\([0-9]+\\(\\.\\([0-9]*\\)\\)?\\|\\.[0-9]+\\)"
+   "\\(E[+-]?[0-9]+\\)?"
+   "\\'"))
+
+;; TODO add test
 (defun sqlite3-guess-type (text)
   (cond
    ((not (stringp text)) 'null)
-   ;;TODO 1.e2
-   ((string-match "\\`[0-9.]+\\'" text) 'number)
+   ((string-match sqlite3-numeric-literal-regexp text)
+    'number)
    (t 'text)))
 
 ;;
@@ -686,6 +689,7 @@ the response of stream."
   (when (eq (process-status stream) 'run)
     (with-timeout (5 (kill-process stream))
       ;; DO NOT use `sqlite3-stream-send-command'
+      ;; No need to wait prompt.
       (process-send-string stream ".quit\n")
       (let ((inhibit-redisplay t))
         (while (eq (process-status stream) 'run)
@@ -701,7 +705,7 @@ the response of stream."
 
 (defun sqlite3-stream--sentinel (proc event)
   (sqlite3--with-process proc
-    (unless (eq (process-status proc) 'run)
+    (when (memq (process-status proc) '(exit signal))
       (kill-buffer (current-buffer)))))
 
 (defun sqlite3-stream--csv-filter (proc)
@@ -711,46 +715,54 @@ the response of stream."
     (process-put proc 'sqlite3-accumulation
                  (append accum data))))
 
-;;TODO high level api to control stream behavior by user.
 (defun sqlite3-stream-send (stream query)
+  "High level api to send QUERY to STREAM by user manually.
+If QUERY is a meta-command, return string of output from STREAM.
+If QUERY is a sql statement, return just `t'"
   (cond
    ((string-match "^[ \t\n]*\\." query)
-    (process-send-string stream (concat query "\n"))
-    ;;TODO check error?
-    (sqlite3-stream--until-prompt stream)
-    nil)
+    (sqlite3-stream-send-command-0 stream query))
    (t
     (sqlite3-stream-send-sql stream query))))
 
 (defun sqlite3-stream-send-command (stream command &rest args)
   "Send COMMAND and ARGS to STREAM without checking COMMAND error.
-TODO You can call this function as a API. Not publish to program user.
-"
+You can call this function as a API. Not need to publish user.
+ Use `sqlite3-stream-send' as a high level API."
+  (let ((line (format "%s %s\n" command (mapconcat 'sqlite3-text args " "))))
+    (sqlite3-stream-send-command-0 stream line)))
+
+(defun sqlite3-stream-send-command-0 (stream query)
+  "Send a meta command to sqlite3 STREAM.
+This function return after checking syntax error of QUERY.
+
+QUERY is a command line that may ommit newline."
   (let ((buf (process-buffer stream)))
     (with-current-buffer buf
       (sqlite3-stream--until-prompt stream)
       ;; clear all text contains prompt.
       (erase-buffer)
-      (process-send-string
-       stream
-       (format "%s %s\n" command (mapconcat 'sqlite3-text args " ")))
-      (sqlite3-stream--until-prompt stream)
+      (process-put stream 'sqlite3-syntax-error nil)
+      (process-send-string stream (sqlite3-terminate-command query))
+      ;; only check syntax error.
+      ;; This check maybe promptly return from sqlite3 process.
+      (sqlite3--maybe-raise-syntax-error stream)
       (goto-char (point-max))
       (buffer-substring (point-min) (point-at-eol 0)))))
 
 (defun sqlite3-stream-send-sql (stream sql)
-  "Send SQL to sqlite3 STREAM. (currently STREAM is a process object)
+  "Send SQL to sqlite3 STREAM.
 This function return after checking syntax error of SQL.
 
-SQL is a sql statement that can ommit statement end (`;').
- Do Not send multiple statements.
+SQL is a sql statement that may ommit statement end `;'.
+ Do Not send multiple statements or comment statement.
+ This may cause STREAM stalling with no error report.
 
 Examples:
 Good: SELECT * FROM table1;
 Good: SELECT * FROM table1
 Good: SELECT * FROM table1\n
- Bad: SELECT * FROM table1; SELECT * FROM table2;
-"
+ Bad: SELECT * FROM table1; SELECT * FROM table2;"
   ;; wait until previous sql was finished.
   (let ((buf (process-buffer stream)))
     (with-current-buffer buf
@@ -768,7 +780,6 @@ Good: SELECT * FROM table1\n
 
 (defun sqlite3-stream-read-query (stream query)
   ;;TODO check stream alive or error more understandable (Deleting buffer)
-  ;; TODO see `sqlite3-stream-send-sql'.
   ;; handling NULL text
   ;; Use different null text each time when executing query.
   (let ((nullvalue (sqlite3--temp-null query)))
@@ -811,7 +822,7 @@ Good: SELECT * FROM table1\n
         (buffer-string)))))
 
 ;;;
-;;; Sqlite3 onetime stream
+;;; Sqlite3 asynchronous read/execute
 ;;;
 
 ;;;###autoload
@@ -821,9 +832,9 @@ FILTER called with one arg that is parsed csv line or `:EOF'.
   Please use `:EOF' argument finish this async process.
   This FILTER is invoked in process buffer.
 
-If QUERY contains syntax error, check the error result before first call of FILTER.
-ARGS accept sqlite3 command arguments 
-e.g. -header"
+If QUERY contains syntax error, raise the error result before return from
+this function.
+ARGS accept sqlite3 command arguments. (e.g. -header)"
   (sqlite3-check-program)
   (unless (stringp query)
     (error "No query is provided"))
@@ -862,6 +873,19 @@ e.g. -header"
           (funcall filter :EOF))))
       (kill-buffer (current-buffer)))))
 
+;;TODO reconsider interface
+;;TODO test
+;;;###autoload
+(defun sqlite3-async-execute (file query finalize &rest args)
+  "TODO"
+  (apply 'sqlite3-async-read
+         file query
+         `(lambda (xs)
+            (when (eq xs :EOF)
+              (funcall ,finalize)))
+         args)
+  nil)
+
 ;;;
 ;;; Sqlite3 lazy reader
 ;;;
@@ -873,8 +897,7 @@ e.g. -header"
   (let ((stream (sqlite3-stream-open file)))
     (sqlite3-stream-send-command stream ".header" "ON")
     (sqlite3-stream-send-sql stream query)
-    (list :stream stream :results nil
-          :position nil :fields nil)))
+    (list :stream stream :fields nil)))
 
 (defun sqlite3-reader-close (reader)
   (let ((stream (plist-get reader :stream)))
@@ -886,27 +909,13 @@ e.g. -header"
 
 (defun sqlite3-reader-read (reader)
   (let ((stream (plist-get reader :stream))
-        (pos (plist-get reader :position))
-        (results (plist-get reader :results))
         row)
     (unless (sqlite3-stream-alive-p stream)
       (error "Stream is closed"))
-    (if (or
-         ;; reader has not stepped yet.
-         (null pos)
-         ;; end of current reader
-         (>= pos (length results)))
-        (sqlite3-reader--step reader)
-      ;; TODO should not make cache.. may have too many results
-      (let* ((max (1- (length results)))
-             (tidx (max (- max pos) 0)))
-        (prog1
-            (nth tidx results)
-          (plist-put reader :position (1+ pos)))))))
+    (sqlite3-reader--step reader)))
 
 (defun sqlite3-reader--step (reader)
   (let* ((stream (plist-get reader :stream))
-         (pos (plist-get reader :position))
          (nullvalue (process-get stream 'sqlite3-null-value))
          row)
     (catch 'eof
@@ -916,58 +925,25 @@ e.g. -header"
           (sqlite3-sleep stream))
         (goto-char (point-min))
         (when (sqlite3-looking-at-prompt)
-          ;;TODO re-consider it!
           (sqlite3-reader-close reader)
-          ;;TODO throw :EOF ??? like async-read
-          (throw 'eof nil))
+          (throw 'eof :EOF))
         (unless (plist-get reader :fields)
           ;; stock result of header
           (let ((fields (sqlite3--read-csv-line-with-deletion nullvalue)))
-            (plist-put reader :fields fields))
-          (plist-put reader :position 0)
-          (setq pos 0))
+            (plist-put reader :fields fields)))
         ;; read and delete it.
-        (setq row (sqlite3--read-csv-line-with-deletion nullvalue))
-        (plist-put reader :position (1+ pos))
-        (let* ((old (plist-get reader :results))
-               (new (cons row old)))
-          (plist-put reader :results new)))
+        (setq row (sqlite3--read-csv-line-with-deletion nullvalue)))
       row)))
 
-(defun sqlite3-reader-seek (reader pos)
-  (let ((res (plist-get reader :results)))
-    (cond
-     ((< (length res) pos)
-      (while (and (sqlite3-reader-read reader)
-                  ;; read to specified position
-                  (< (plist-get reader :position) pos))))
-     (t
-      (plist-put reader :position pos)))
-    (plist-get reader :position)))
-
-(defun sqlite3-reader-peek (reader &optional pos)
-  "Utility to read a row at POS or READER current position.
-"
-  (let* ((prev (plist-get reader :position))
-         (pos
-          (cond
-           ((null pos)
-            (plist-get reader :position))
-           ((sqlite3-reader-open-p reader)
-            ;; set new position to actual position
-            (sqlite3-reader-seek reader pos))
-           (t pos))))
-    (unwind-protect
-        (cond
-         ((null pos)
-          ;; reader has not yet opened.
-          (sqlite3-reader-read reader))
-         (t
-          (let* ((res (plist-get reader :results))
-                 (max (1- (length res)))
-                 (tidx (- max pos)))
-            (nth tidx res))))
-      (sqlite3-reader-seek reader prev))))
+(defun sqlite3-reader-peek (reader)
+  "Utility to read a row from READER."
+  (let* ((stream (plist-get reader :stream))
+         (nullvalue (process-get stream 'sqlite3-null-value))
+         row)
+    (with-current-buffer (process-buffer stream)
+      (unwind-protect
+          (sqlite3--read-csv-line nullvalue)
+        (goto-char (point-min))))))
 
 ;;;
 ;;; Synchronous utilities
@@ -983,6 +959,8 @@ FUNC accept just one arg created stream object from `sqlite3-stream-open'."
     (unwind-protect
         (funcall func stream)
       (sqlite3-stream-close stream))))
+
+(put 'sqlite3-call/stream 'lisp-indent-function 1)
 
 ;;;###autoload
 (defun sqlite3-call/transaction (file func)
@@ -1001,15 +979,20 @@ FUNC accept just one arg created stream object from `sqlite3-stream-open'."
          (sqlite3-stream-send-sql stream "ROLLBACK")
          (signal (car err) (cdr err)))))))
 
+(put 'sqlite3-call/transaction 'lisp-indent-function 1)
+
 ;;
-;; Sqlite3 onetime query
+;; Sqlite3 synchronous read/execute
 ;;
 
 ;;;###autoload
 (defun sqlite3-read (file query &rest args)
   "Read QUERY result in sqlite3 FILE.
 This function designed with SELECT QUERY, but works fine another
- sql query (UPDATE/INSERT/DELETE)."
+ sql query (UPDATE/INSERT/DELETE).
+
+todo: ARGS accept some of sqlite3 command arguments but do not use it unless you understand what you are doing.
+"
   (sqlite3-check-program)
   (with-temp-buffer
     (let* ((nullvalue (sqlite3--temp-null query))
@@ -1023,20 +1006,27 @@ This function designed with SELECT QUERY, but works fine another
         (error "%s" (buffer-string)))
       (sqlite3--read-csv-with-deletion nullvalue))))
 
+;;;###autoload
+(defun sqlite3-execute (file sql)
+  "Same as `sqlite3-read' but intentional to use non SELECT statement."
+  (sqlite3-read file sql)
+  nil)
+
 ;;
 ;; Read object from sqlite3 database
 ;;
 
-(defun sqlite3-read--objects (stream type)
+(defun sqlite3-read--objects (stream &optional type)
   (let* ((query
           (sqlite3-format
-           '("SELECT name "
+           `(
+             "SELECT name "
              " FROM sqlite_master "
-             " WHERE type = %T")
-           type))
+             " WHERE 1 = 1 "
+             ,@(and type
+                    `(" AND type = %T{type}")))))
          (data (sqlite3-stream-read-query stream query)))
-    (loop for row in data
-          collect (car row))))
+    (mapcar 'car data)))
 
 (defun sqlite3-read-views (stream)
   (sqlite3-read--objects stream "view"))
