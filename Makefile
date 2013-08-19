@@ -12,6 +12,11 @@ RELEASE_FILES = \
 	sqlite3-helm.el sqlite3-mode.el sqlite3-pkg.el \
 	sqlite3.el
 
+check:
+	emacs -q -batch -eval "(byte-compile-file \"sqlite3.el\")"; \
+	emacs -q -batch -l Emacs-pcsv/pcsv.el -l sqlite3.el -l sqlite3-test.el \
+		-eval "(ert-run-tests-batch-and-exit '(tag sqlite3))"
+
 release: package
 	rm -f $(ARCHIVE_DIR_PREFIX)/$(PACKAGE)-$(VERSION).tar
 	mv /tmp/$(PACKAGE)-$(VERSION).tar $(ARCHIVE_DIR_PREFIX)
