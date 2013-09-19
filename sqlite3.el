@@ -554,12 +554,13 @@ e.g.
 
 ;; http://www.sqlite.org/syntaxdiagrams.html#numeric-literal
 (defconst sqlite3-numeric-literal-regexp
-  (concat
-   "\\`"
-   "[+-]?"
-   "\\([0-9]+\\(\\.\\([0-9]*\\)\\)?\\|\\.[0-9]+\\)"
-   "\\(E[+-]?[0-9]+\\)?"
-   "\\'"))
+  (eval-when-compile
+    (concat
+     "\\`"
+     "[+-]?"
+     "\\([0-9]+\\(\\.\\([0-9]*\\)\\)?\\|\\.[0-9]+\\)"
+     "\\(E[+-]?[0-9]+\\)?"
+     "\\'")))
 
 ;; TODO add test
 (defun sqlite3-guess-type (text)
@@ -991,7 +992,8 @@ FUNC accept just one arg created stream object from `sqlite3-stream-open'."
 This function designed with SELECT QUERY, but works fine another
  sql query (UPDATE/INSERT/DELETE).
 
-todo: ARGS accept some of sqlite3 command arguments but do not use it unless you understand what you are doing.
+ARGS accept some of sqlite3 command arguments but do not use it
+ unless you understand what you are doing.
 "
   (sqlite3-check-program)
   (with-temp-buffer
