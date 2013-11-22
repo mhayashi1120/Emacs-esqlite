@@ -26,13 +26,14 @@
 
 ;; sqlite3.el is a implementation to handle sqlite3 database.
 ;; Following functions are provided:
-;; * construct sqlite3 SQL.
-;; * read sqlite3 row as list of string.
-;; * async read sqlite3 row as list of string.
-;; * escape SQL value to construct SQL
+;; * Read sqlite3 row as list of string.
+;; * Async read sqlite3 row as list of string.
 ;; * sqlite3 process with being stationed
-
-;; TODO
+;; * Construct sqlite3 SQL.
+;; * Escape SQL value to construct SQL
+;; * todo lazy reader
+;; * Some of basic utilities.
+;; * NULL handling (denote as :null keyword)
 
 ;;; Install:
 
@@ -497,9 +498,9 @@ Delete csv data if reading was succeeded."
 
 ;;;###autoload
 (defun sqlite3-format (sqlite3-fmt &rest sqlite3-objects)
-  "Prepare sql with FMT like `format'.
+  "Prepare sql with SQLITE3-FMT like `format'.
 
-FMT is a string or list of string.
+SQLITE3-FMT is a string or list of string.
  each list item join with newline.
 
 Each directive accept arg which contains variable name.
@@ -526,6 +527,7 @@ e.g.
     (let ((fmt-regexp
            (concat
             (regexp-opt (mapcar 'car sqlite3-format--table) t)
+            ;; Optional varname
             "\\(?:{\\(.+?\\)}\\)?"))
           (case-fold-search nil))
       (while (search-forward "%" nil t)
@@ -1107,7 +1109,7 @@ Elements of the item list are:
 
 (add-hook 'kill-emacs-hook 'sqlite3-killing-emacs)
 
-;; TODO testing
+;; TODO testing: reuse stream when `sqlite3-stream-open' or create new high level api?
 (defun sqlite3-stream--reuse (file)
   (loop with filename = (expand-file-name file)
         for p in (process-list)

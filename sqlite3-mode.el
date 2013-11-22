@@ -531,6 +531,9 @@ Do not send compound statement or containing comment sql.
     (define-key map "\C-c\C-y" 'sqlite3-table-mode-paste-cell)
     (define-key map "\C-c>" 'sqlite3-table-mode-forward-page)
     (define-key map "\C-c<" 'sqlite3-table-mode-backward-page)
+    ;;TODO
+    ;; (define-key map "\C-c\e>" 'sqlite3-table-mode-last-page)
+    ;; (define-key map "\C-c\e<" 'sqlite3-table-mode-first-page)
     (define-key map "F" 'sqlite3-table-mode-forward-page)
     (define-key map "B" 'sqlite3-table-mode-backward-page)
     (define-key map "\C-i" 'sqlite3-table-mode-forward-cell)
