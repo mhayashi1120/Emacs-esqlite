@@ -24,6 +24,14 @@
 
 ;;; Commentary:
 
+;; sqlite3.el is a implementation to handle sqlite3 database.
+;; Following functions are provided:
+;; * construct sqlite3 SQL.
+;; * read sqlite3 row as list of string.
+;; * async read sqlite3 row as list of string.
+;; * escape SQL value to construct SQL
+;; * sqlite3 process with being stationed
+
 ;; TODO
 
 ;;; Install:
