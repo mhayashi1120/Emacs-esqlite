@@ -1758,6 +1758,7 @@ Do not send compound statement or containing comment sql.
        ,@(and orders
               `(" ORDER BY %s{order-by}"))))))
 
+;;TODO
 (defun sqlite3-table-mode--compile-preceeding-where (orders)
   (loop for order in orders
         do (let ((column (car order))

@@ -250,9 +250,6 @@ Please download and install fakecygpty (Google it!!)"
     ;; before last prompt "sqlite> "
     (sqlite3-looking-at-prompt)))
 
-;;TODO why continue prompt??
-;; (looking-at "^\\( *\\.\\.\\.> \\)*sqlite> \\'")
-;;TODO
 (defconst sqlite3-prompt-regexp
   (concat "^"
           "\\( *"
@@ -263,20 +260,20 @@ Please download and install fakecygpty (Google it!!)"
 
 (defvar sqlite3--default-init-file nil)
 
-(defun sqlite3--create-init-file ()
-  (let ((file (make-temp-file "emacs-sqlite3-")))
-    (with-temp-buffer
-      (insert (format ".prompt \"%s\" \"%s\"\n"
-                      sqlite3-prompt
-                      sqlite3-continue-prompt))
-      (write-region (point-min) (point-max) file nil 'no-msg))
-    file))
-
 ;; To avoid user initialization file ~/.sqliterc
 (defun sqlite3--default-init-file (&optional refresh)
-  (or (and (not refresh) sqlite3--default-init-file)
+  (or (and (not refresh)
+           (stringp sqlite3--default-init-file)
+           (file-exists-p sqlite3--default-init-file)
+           sqlite3--default-init-file)
       (setq sqlite3--default-init-file
-            (sqlite3--create-init-file))))
+            (let ((file (make-temp-file "emacs-sqlite3-")))
+              (with-temp-buffer
+                (insert (format ".prompt \"%s\" \"%s\"\n"
+                                sqlite3-prompt
+                                sqlite3-continue-prompt))
+                (write-region (point-min) (point-max) file nil 'no-msg))
+              file))))
 
 (defmacro sqlite3--with-env (&rest form)
   `(let ((process-environment (copy-sequence process-environment))
@@ -504,6 +501,7 @@ SQLITE3-FMT is a string or list of string.
  each list item join with newline.
 
 Each directive accept arg which contains variable name.
+  This variable name must not contain `sqlite3-' prefix.
 e.g.
 \(let ((some-var \"FOO\")) (sqlite3-format \"%s %s{some-var}\" \"HOGE\"))
  => \"HOGE FOO\"
@@ -516,7 +514,7 @@ e.g.
 %o: escape db object with quote
 %O: escape db objects with quote (joined by \", \")
 %V: escape sql value(s) with quote if need
-  (if list, joined by \", \" TODO about paren)
+  (if list, joined by \", \" without paren)
 
 \(fn fmt &rest objects)"
   (with-temp-buffer
@@ -524,27 +522,31 @@ e.g.
       (setq sqlite3-fmt (mapconcat 'identity sqlite3-fmt "\n")))
     (insert sqlite3-fmt)
     (goto-char (point-min))
-    (let ((fmt-regexp
-           (concat
-            (regexp-opt (mapcar 'car sqlite3-format--table) t)
-            ;; Optional varname
-            "\\(?:{\\(.+?\\)}\\)?"))
+    (let ((sqlite3-fmt-regexp
+           (eval-when-compile
+             (concat
+              (regexp-opt (mapcar 'car sqlite3-format--table) t)
+              ;; Optional varname
+              "\\(?:{\\(.+?\\)}\\)?")))
           (case-fold-search nil))
       (while (search-forward "%" nil t)
         (cond
          ((eq (char-after) ?%)
           (delete-char 1))
-         ((looking-at fmt-regexp)
+         ((looking-at sqlite3-fmt-regexp)
           (let* ((spec (match-string 1))
-                 (varname (intern-soft (match-string 2)))
+                 (varname (match-string 2))
+                 (varsym (intern-soft varname))
                  (fn (assoc-default spec sqlite3-format--table))
                  obj)
+            (when (string-match "\\`sqlite3-" varname)
+              (error "Unable use sqlite3- prefix variable %s" varname))
             ;; Delete formatter directive
             (delete-region (1- (point)) (match-end 0))
             (cond
-             (varname
-              ;;TODO reconsider it e.g. `fmt-regexp' can't use here.
-              (setq obj (symbol-value varname)))
+             (varsym
+              ;; raise error asis if varname is not defined.
+              (setq obj (symbol-value varsym)))
              (sqlite3-objects
               (setq obj (car sqlite3-objects))
               (setq sqlite3-objects (cdr sqlite3-objects)))
@@ -595,10 +597,9 @@ e.g.
                       (let ((end (float-time)))
                         (- end start))))))
 
-;;TODO remove proc arg
-(defun sqlite3-sleep (proc)
+(defun sqlite3-sleep (_dummy)
   ;; Other code affect to buffer while `sleep-for'.
-  ;; TODO timer? filter? I can't get clue.
+  ;; TODO why need save-excursion? timer? filter? I can't get clue.
   (save-excursion
     ;; Achieve like a asynchronous behavior (ex: draw mode line)
     (redisplay)
@@ -872,7 +873,7 @@ ARGS accept sqlite3 command arguments. (e.g. -header)"
 
 (defun sqlite3-async-read--sentinel (proc event)
   (sqlite3--with-process proc
-    (unless (memq (process-status proc) '(run signal))
+    (when (memq (process-status proc) '(exit))
       (let ((errmsg (process-get proc 'sqlite3-syntax-error))
             (filter (process-get proc 'sqlite3-filter)))
         (cond
@@ -881,20 +882,23 @@ ARGS accept sqlite3 command arguments. (e.g. -header)"
          ((functionp filter)
           ;; If QUERY contains some error, `sqlite3--maybe-raise-syntax-error'
           ;; should report error before sentinel.
-          (funcall filter :EOF))))
+          (funcall filter :EOF)))))
+    (unless (memq (process-status proc) '(run))
       (kill-buffer (current-buffer)))))
 
-;;TODO reconsider interface
 ;;TODO test
 ;;;###autoload
-(defun sqlite3-async-execute (file query finalize &rest args)
-  "TODO"
-  (apply 'sqlite3-async-read
-         file query
-         `(lambda (xs)
-            (when (eq xs :EOF)
-              (funcall ,finalize)))
-         args)
+(defun sqlite3-async-execute (file query &optional finalize &rest args)
+  "Utility function to wrap `sqlite3-async-read'
+This function expect non result set QUERY.
+FINALIZE is function which call with no argument.
+Other arguments are passed to `sqlite3-async-read'."
+  (let ((filter (if finalize
+                    `(lambda (xs)
+                       (when (eq xs :EOF)
+                         (funcall ,finalize)))
+                  `(lambda (xs)))))
+    (apply 'sqlite3-async-read file query filter args))
   nil)
 
 ;;;
@@ -947,11 +951,15 @@ ARGS accept sqlite3 command arguments. (e.g. -header)"
       row)))
 
 (defun sqlite3-reader-peek (reader)
-  "Utility to read a row from READER."
+  "Utility to read a row from READER.
+This function may block."
   (let* ((stream (plist-get reader :stream))
          (nullvalue (process-get stream 'sqlite3-null-value))
          row)
     (with-current-buffer (process-buffer stream)
+      ;; wait until output comes.
+      (while (= (point-min) (point-max))
+        (sqlite3-sleep stream))
       (unwind-protect
           (sqlite3--read-csv-line nullvalue)
         (goto-char (point-min))))))

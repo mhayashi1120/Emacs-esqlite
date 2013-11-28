@@ -4,7 +4,7 @@
 ;; Keywords: data
 ;; URL: https://github.com/mhayashi1120/sqlite3.el/raw/master/sqlite3-helm.el
 ;; Emacs: GNU Emacs 24 or later
-;; Package-Requires: ((sqlite3 "0.0.1"))
+;; Package-Requires: ((sqlite3 "0.0.1") (helm "todo"))
 ;; Version: 0.0.1
 
 ;; This program is free software; you can redistribute it and/or
@@ -28,6 +28,8 @@
 ;; * GLOB syntax is greater than LIKE syntax
 ;;   http://pokutuna.hatenablog.com/entry/20111113/1321126659
 
+;; * add samples
+
 ;;; Code:
 
 (eval-when-compile
@@ -36,9 +38,13 @@
 (require 'sqlite3)
 (require 'pcsv)
 
-;;TODO package-requires helm
+;; do not require helm
+
 (declare-function 'helm-log "helm")
 (declare-function 'helm-get-current-source "helm")
+
+(defvar helm-pattern)
+(defvar helm-async-processes)
 
 ;;;
 ;;; Sqlite3 for helm
@@ -201,12 +207,15 @@ http://www.sqlite.org/lang_select.html"
                   (replace-regexp-in-string "\n" "" event))))))
 
 (defun sqlite3-helm-hack-for-multiline (candidates)
-  ;; helm split csv stream by newline. restore the csv and try
-  ;; to parse
+  ;; helm split csv stream by newline. restore the csv as one text
+  ;; and try to parse it.
+
+  ;; No newline in one value. (No problem)
   ;; OUTPUT-STRING: a,b\nc,d\ne CANDIDATES: ("a,b" "c,d") INCOMPLETE-LINE: "e"
   ;; OUTPUT-STRING: a,b\nc,d\n  CANDIDATES: ("a,b" "c,d") INCOMPLETE-LINE: ""
   ;; OUTPUT-STRING: a,b\nc,d    CANDIDATES: ("a,b")       INCOMPLETE-LINE: "c,d"
 
+  ;; There is newline and quote by double-quote.
   ;; OUTPUT-STRING: a,b\nc,"d\nD"\ne CANDIDATES: ("a,b" "c,\"d\nD\"") INCOMPLETE-LINE: "e"
   ;; OUTPUT-STRING: a,b\nc,"d\nD"\n  CANDIDATES: ("a,b" "c,\"d\nD\"") INCOMPLETE-LINE: ""
   ;; OUTPUT-STRING: a,b\nc,"d\nD"    CANDIDATES: ("a,b" "c,\"d")      INCOMPLETE-LINE: "D\""

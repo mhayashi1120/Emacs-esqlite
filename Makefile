@@ -13,8 +13,8 @@ RELEASE_FILES = \
 	sqlite3.el
 
 check:
-	emacs -q -batch -eval "(byte-compile-file \"sqlite3.el\")"; \
-	emacs -q -batch -l Emacs-pcsv/pcsv.el -l sqlite3.el -l sqlite3-test.el \
+	emacs -q -batch -L . -L Emacs-pcsv -eval "(progn (byte-compile-file \"sqlite3.el\") (byte-compile-file \"sqlite3-helm.el\") (byte-compile-file \"sqlite3-mode.el\"))"; \
+	emacs -q -batch -l Emacs-pcsv/pcsv.el -l sqlite3.el -l sqlite3-helm.el -l sqlite3-test.el \
 		-eval "(ert-run-tests-batch-and-exit '(tag sqlite3))"
 
 release: package
