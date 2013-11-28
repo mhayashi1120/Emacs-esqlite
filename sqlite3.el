@@ -469,29 +469,31 @@ Delete csv data if reading was succeeded."
    (t
     (error "Not a supported type %s" object))))
 
-(defvar sqlite3-format--table
-  '(
-    ("s" . (lambda (x)
-             (cond
-              ((stringp x) x)
-              ((numberp x) (number-to-string x))
-              (t (prin1-to-string x)))))
-    ("t" . sqlite3-escape-string)
-    ("T" . sqlite3-text)
-    ("l" . sqlite3-escape-like)
-    ("L" . (lambda (x)
-             (concat
-              (sqlite3-text (sqlite3-escape-like x))
-              " ESCAPE '\\' ")))
-    ;; some database object
-    ("o" . sqlite3-format-object)
-    ;; column list
-    ("O" . (lambda (l)
-             (mapconcat (lambda (x) (sqlite3-format-object x))
-                        l ", ")))
-    ;; some value (string, number, list) with properly quoted
-    ("V" . sqlite3-format-value)
-    ))
+(eval-and-compile
+  (defvar sqlite3-format--table
+    (eval-when-compile
+      '(
+        ("s" . (lambda (x)
+                 (cond
+                  ((stringp x) x)
+                  ((numberp x) (number-to-string x))
+                  (t (prin1-to-string x)))))
+        ("t" . sqlite3-escape-string)
+        ("T" . sqlite3-text)
+        ("l" . sqlite3-escape-like)
+        ("L" . (lambda (x)
+                 (concat
+                  (sqlite3-text (sqlite3-escape-like x))
+                  " ESCAPE '\\' ")))
+        ;; some database object
+        ("o" . sqlite3-format-object)
+        ;; column list
+        ("O" . (lambda (l)
+                 (mapconcat (lambda (x) (sqlite3-format-object x))
+                            l ", ")))
+        ;; some value (string, number, list) with properly quoted
+        ("V" . sqlite3-format-value)
+        ))))
 
 ;;;###autoload
 (defun sqlite3-format (sqlite3-fmt &rest sqlite3-objects)
@@ -539,7 +541,7 @@ e.g.
                  (varsym (intern-soft varname))
                  (fn (assoc-default spec sqlite3-format--table))
                  obj)
-            (when (string-match "\\`sqlite3-" varname)
+            (when (and varname (string-match "\\`sqlite3-" varname))
               (error "Unable use sqlite3- prefix variable %s" varname))
             ;; Delete formatter directive
             (delete-region (1- (point)) (match-end 0))
