@@ -31,7 +31,12 @@
           (should (equal
                    '(("あイｳ"))
                    (sqlite3-stream-read-query stream "SELECT text FROM hoge WHERE id = 3")))
-          )
+          (should (equal
+                   '("あイｳ")
+                   (sqlite3-stream-read-top stream "SELECT text FROM hoge WHERE id = 3")))
+          (should (equal
+                   "あイｳ"
+                   (sqlite3-stream-read-atom stream "SELECT text FROM hoge WHERE id = 3"))))
       (sqlite3-stream-close stream)
       (delete-file db))))
 
@@ -86,7 +91,9 @@
           (sqlite3-read db "CREATE TABLE hoge (id, text);")
           (sqlite3-read db "INSERT INTO hoge VALUES (1, 'あイｳ');")
           (should (equal '(("あイｳ")) (sqlite3-read db "SELECT text FROM hoge WHERE id = 1")))
-          (should-error (sqlite3-read db "SELECT")))
+          (should-error (sqlite3-read db "SELECT"))
+          (should (equal '("あイｳ") (sqlite3-read-top db "SELECT text FROM hoge WHERE id = 1")))
+          (should (equal "あイｳ" (sqlite3-read-atom db "SELECT text FROM hoge WHERE id = 1"))))
       (delete-file db))))
 
 (ert-deftest sqlite3-reader-0001 ()
@@ -194,3 +201,11 @@
               "INSERT INTO (%O)"
               " VALUES (%V) ")
             '("a" "b") '("1" 2)))))
+
+(ert-deftest sqlite3-number ()
+  :tags '(sqlite3)
+  (should (sqlite3-numeric-text-p "1"))
+  (should (sqlite3-numeric-text-p "+2"))
+  (should (sqlite3-numeric-text-p "-3"))
+  (should (sqlite3-numeric-text-p "+4.0"))
+  (should (sqlite3-numeric-text-p "+4.0E50")))

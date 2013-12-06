@@ -37,8 +37,7 @@
 
 ;;; Install:
 
-;; (autoload 'sqlite3-file-guessed-database-p "sqlite3"
-;;   "Guess the FILE is a sqlite3 database or not")
+;; Please install from ELPA. (TODO url)
 
 ;;; TODO:
 ;; * blob
@@ -222,7 +221,7 @@ Please download and install fakecygpty (Google it!!)"
 
 (defvar sqlite3-default-coding-system
   ;; TODO reconsider it
-  ;; -> portable db.
+  ;; -> portable db. (sjis db on windows)
   ;; -> temporary change coding-system
   (let* ((syseol (let ((type (coding-system-eol-type
                               ;; guess sqlite3 command environment
@@ -576,13 +575,10 @@ e.g.
      "\\(E[+-]?[0-9]+\\)?"
      "\\'")))
 
-;; TODO add test
-(defun sqlite3-guess-type (text)
-  (cond
-   ((not (stringp text)) 'null)
-   ((string-match sqlite3-numeric-literal-regexp text)
-    'number)
-   (t 'text)))
+(defun sqlite3-numeric-text-p (text)
+  "Utility function to check TEXT is numeric"
+  (and (string-match sqlite3-numeric-literal-regexp text)
+       t))
 
 ;;
 ;; sleep in process filter
@@ -621,7 +617,7 @@ e.g.
 
 ;;;###autoload
 (defun sqlite3-text (string &optional quote-char)
-  "Convenient function to provide make quoted STRING in sql."
+  "Convenience function to provide make quoted STRING in sql."
   (setq quote-char (or quote-char ?\'))
   (format "%c%s%c"
           quote-char
@@ -675,7 +671,10 @@ To create the like pattern:
        (process-get obj 'sqlite3-stream-process-p)))
 
 (defun sqlite3-stream-alive-p (stream)
-  (eq (process-status stream) 'run))
+  (and (eq (process-status stream) 'run)
+       ;; check buffer either.
+       ;; process-status still `run' after killing buffer
+       (buffer-live-p (process-buffer stream))))
 
 (defun sqlite3-stream-filename (stream)
   (process-get stream 'sqlite3-filename))
@@ -684,7 +683,10 @@ To create the like pattern:
 (defun sqlite3-stream-open (file)
   "Open FILE stream as sqlite3 database.
 Optional NULLVALUE indicate text expression of NULL. This option may improve
-the response of stream."
+the response of stream.
+
+This function return process as stream object, but do not use this as a process object.
+This object style may be changed in future release."
   (sqlite3-check-program)
   (let* ((stream (sqlite3-start-csv-process file)))
     (process-put stream 'sqlite3-stream-process-p t)
@@ -793,7 +795,8 @@ Good: SELECT * FROM table1\n
 (defalias 'sqlite3-stream-execute-sql 'sqlite3-stream-send-sql)
 
 (defun sqlite3-stream-read-query (stream query)
-  ;;TODO check stream alive or error more understandable (Deleting buffer)
+  (unless (sqlite3-stream-alive-p stream)
+    (error "Stream has been closed"))
   ;; handling NULL text
   ;; Use different null text each time when executing query.
   (let ((nullvalue (sqlite3--temp-null query)))
@@ -811,6 +814,16 @@ Good: SELECT * FROM table1\n
         (sqlite3-stream--wait stream))
     (process-put stream 'sqlite3-filter nil))
   (process-get stream 'sqlite3-accumulation))
+
+(defun sqlite3-stream-read-top (stream query)
+  "Convenience function with wrapping `sqlite3-stream-read-query' to get a first row
+of the results."
+  (car-safe (sqlite3-stream-read-query stream query)))
+
+(defun sqlite3-stream-read-atom (stream query)
+  "Convenience function with wrapping `sqlite3-stream-read-top' to get a first item
+of the results."
+  (car-safe (sqlite3-stream-read-top stream query)))
 
 ;; wait until prompt to buffer
 (defun sqlite3-stream--wait (stream)
@@ -1027,6 +1040,18 @@ ARGS accept some of sqlite3 command arguments but do not use it
             (error "%s" errmsg)))
         (error "%s" (buffer-string)))
       (sqlite3--read-csv-with-deletion nullvalue))))
+
+;;;###autoload
+(defun sqlite3-read-top (file query &rest args)
+  "Convenience function with wrapping `sqlite3-read' to get a first row
+of the results."
+  (car-safe (apply 'sqlite3-read file query args)))
+
+;;;###autoload
+(defun sqlite3-read-atom (file query &rest args)
+  "Convenience function with wrapping `sqlite3-read-top' to get a first item
+of the results."
+  (car-safe (apply 'sqlite3-read-top file query args)))
 
 ;;;###autoload
 (defun sqlite3-execute (file sql)
