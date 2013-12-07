@@ -11,23 +11,23 @@
          (stream (sqlite3-stream-open db)))
     (unwind-protect
         (progn
-          (should (sqlite3-stream-execute-sql stream "CREATE TABLE hoge (id INTEGER PRIMARY KEY, text TEXT)"))
+          (should (sqlite3-stream-execute stream "CREATE TABLE hoge (id INTEGER PRIMARY KEY, text TEXT)"))
           (should (equal '((0 "id" "INTEGER" nil :null t) (1 "text" "TEXT" nil :null nil))
                          (sqlite3-read-table-schema stream "hoge")))
-          (should (sqlite3-stream-execute-sql stream "INSERT INTO hoge VALUES (1, 'a')"))
-          (should (sqlite3-stream-execute-sql stream "INSERT INTO hoge VALUES (2, 'b')"))
+          (should (sqlite3-stream-execute stream "INSERT INTO hoge VALUES (1, 'a')"))
+          (should (sqlite3-stream-execute stream "INSERT INTO hoge VALUES (2, 'b')"))
           (should (equal '(("1" "a") ("2" "b"))
                          (sqlite3-stream-read
                           stream "SELECT * FROM hoge ORDER BY id")))
-          (should (sqlite3-stream-execute-sql stream "UPDATE hoge SET id = id + 10, text = text || 'z'"))
+          (should (sqlite3-stream-execute stream "UPDATE hoge SET id = id + 10, text = text || 'z'"))
           (should (equal
                    '(("11" "az") ("12" "bz"))
                    (sqlite3-stream-read stream "SELECT * FROM hoge")))
-          (should (sqlite3-stream-execute-sql stream "DELETE FROM hoge WHERE id = 11"))
+          (should (sqlite3-stream-execute stream "DELETE FROM hoge WHERE id = 11"))
           (should (equal
                    '(("12" "bz"))
                    (sqlite3-stream-read stream "SELECT * FROM hoge")))
-          (should (sqlite3-stream-execute-sql stream "INSERT INTO hoge VALUES(3, 'あイｳ')"))
+          (should (sqlite3-stream-execute stream "INSERT INTO hoge VALUES(3, 'あイｳ')"))
           (should (equal
                    '(("あイｳ"))
                    (sqlite3-stream-read stream "SELECT text FROM hoge WHERE id = 3")))
@@ -46,11 +46,11 @@
          (stream (sqlite3-stream-open db)))
     (unwind-protect
         (progn
-          (sqlite3-stream-execute-sql stream "CREATE TABLE hoge (id INTEGER PRIMARY KEY)")
-          (should-error (sqlite3-stream-execute-sql stream "CREATE TABLE1"))
-          (should-error (sqlite3-stream-execute-sql stream "CREATE TABLE hoge (id INTEGER PRIMARY KEY)"))
-          (sqlite3-stream-execute-sql stream "INSERT INTO hoge VALUES (1)")
-          (should-error (sqlite3-stream-execute-sql stream "INSERT INTO hoge VALUES (1)"))
+          (sqlite3-stream-execute stream "CREATE TABLE hoge (id INTEGER PRIMARY KEY)")
+          (should-error (sqlite3-stream-execute stream "CREATE TABLE1"))
+          (should-error (sqlite3-stream-execute stream "CREATE TABLE hoge (id INTEGER PRIMARY KEY)"))
+          (sqlite3-stream-execute stream "INSERT INTO hoge VALUES (1)")
+          (should-error (sqlite3-stream-execute stream "INSERT INTO hoge VALUES (1)"))
           (should (equal '(("1")) (sqlite3-stream-read stream "SELECT * FROM hoge")))
           (should-error (sqlite3-stream-read stream "SELECT"))
           ;; works fine after syntax error

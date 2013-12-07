@@ -3,9 +3,12 @@
 (defconst sqlite3-dev-try-count 10)
 (defconst sqlite3-dev-stream (sqlite3-stream-open sqlite3-dev-file))
 
-(sqlite3-read sqlite3-dev-file "CREATE TABLE hoge (id);")
-(dotimes (i 1000)
-  (sqlite3-read sqlite3-dev-file (format "INSERT INTO hoge VALUES (%d);" i)))
+(sqlite3-stream-execute sqlite3-dev-stream "CREATE TABLE hoge (id);")
+(loop for start from 0 to 1000 by 100
+      do (sqlite3-stream-execute
+          sqlite3-dev-stream
+          (format "INSERT INTO hoge VALUES %s;"
+                  (mapconcat (lambda (x) (format "(%d)" x)) (number-sequence start (+ start 100)) ", " ))))
 
 
 (defmacro sqlite3-benchmark (&rest form)

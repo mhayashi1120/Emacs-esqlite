@@ -382,7 +382,7 @@ TODO safe-hook"
 (defun sqlite3-mode--execute-sql (sql)
   (sqlite3-mode--check-stream)
   (let ((stream (sqlite3-mode-ref :stream)))
-    (sqlite3-stream-execute-sql stream sql)))
+    (sqlite3-stream-execute stream sql)))
 
 (defun sqlite3-mode--check-stream ()
   "Check current buffer's database file is opend by sqlite."
@@ -2504,16 +2504,16 @@ If you need transaction, begin transaction by your own before calling this funct
     (let ((temp-create (sqlite3-format
                         "CREATE TEMPORARY TABLE %o (%O)"
                         temp-table src-columns)))
-      (sqlite3-stream-execute-sql stream temp-create))
+      (sqlite3-stream-execute stream temp-create))
     (let ((temp-insert (sqlite3-format
                         "INSERT INTO %o SELECT %O FROM %o"
                         temp-table src-columns table)))
-      (sqlite3-stream-execute-sql stream temp-insert))
+      (sqlite3-stream-execute stream temp-insert))
     (let ((drop-object (sqlite3-format
                         "DROP TABLE %o"
                         table)))
-      (sqlite3-stream-execute-sql stream drop-object))
-    (sqlite3-stream-execute-sql stream create-sql)
+      (sqlite3-stream-execute stream drop-object))
+    (sqlite3-stream-execute stream create-sql)
     (let* ((new-columns (mapcar
                          (lambda (x) (nth 1 x))
                          (sqlite3-read-table-schema stream table)))
@@ -2527,11 +2527,11 @@ If you need transaction, begin transaction by your own before calling this funct
                            "INSERT INTO %o (%O) SELECT %O FROM %o"
                            table share-columns share-columns
                            temp-table)))
-      (sqlite3-stream-execute-sql stream insert-object))
+      (sqlite3-stream-execute stream insert-object))
     (let ((drop-temp (sqlite3-format
                       "DROP TABLE %o"
                       temp-table)))
-      (sqlite3-stream-execute-sql stream drop-temp))))
+      (sqlite3-stream-execute stream drop-temp))))
 
 ;;TODO non used
 (defun sqlite3-mode--faced-insert (face &rest args)

@@ -792,7 +792,7 @@ Good: SELECT * FROM table1\n
       (sqlite3--maybe-raise-syntax-error stream)
       t)))
 
-(defalias 'sqlite3-stream-execute-sql 'sqlite3-stream-send-sql)
+(defalias 'sqlite3-stream-execute 'sqlite3-stream-send-sql)
 
 (defun sqlite3-stream-read (stream query)
   (unless (sqlite3-stream-alive-p stream)
