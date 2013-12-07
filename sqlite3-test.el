@@ -17,20 +17,20 @@
           (should (sqlite3-stream-execute-sql stream "INSERT INTO hoge VALUES (1, 'a')"))
           (should (sqlite3-stream-execute-sql stream "INSERT INTO hoge VALUES (2, 'b')"))
           (should (equal '(("1" "a") ("2" "b"))
-                         (sqlite3-stream-read-query
+                         (sqlite3-stream-read
                           stream "SELECT * FROM hoge ORDER BY id")))
           (should (sqlite3-stream-execute-sql stream "UPDATE hoge SET id = id + 10, text = text || 'z'"))
           (should (equal
                    '(("11" "az") ("12" "bz"))
-                   (sqlite3-stream-read-query stream "SELECT * FROM hoge")))
+                   (sqlite3-stream-read stream "SELECT * FROM hoge")))
           (should (sqlite3-stream-execute-sql stream "DELETE FROM hoge WHERE id = 11"))
           (should (equal
                    '(("12" "bz"))
-                   (sqlite3-stream-read-query stream "SELECT * FROM hoge")))
+                   (sqlite3-stream-read stream "SELECT * FROM hoge")))
           (should (sqlite3-stream-execute-sql stream "INSERT INTO hoge VALUES(3, 'あイｳ')"))
           (should (equal
                    '(("あイｳ"))
-                   (sqlite3-stream-read-query stream "SELECT text FROM hoge WHERE id = 3")))
+                   (sqlite3-stream-read stream "SELECT text FROM hoge WHERE id = 3")))
           (should (equal
                    '("あイｳ")
                    (sqlite3-stream-read-top stream "SELECT text FROM hoge WHERE id = 3")))
@@ -51,10 +51,10 @@
           (should-error (sqlite3-stream-execute-sql stream "CREATE TABLE hoge (id INTEGER PRIMARY KEY)"))
           (sqlite3-stream-execute-sql stream "INSERT INTO hoge VALUES (1)")
           (should-error (sqlite3-stream-execute-sql stream "INSERT INTO hoge VALUES (1)"))
-          (should (equal '(("1")) (sqlite3-stream-read-query stream "SELECT * FROM hoge")))
-          (should-error (sqlite3-stream-read-query stream "SELECT"))
+          (should (equal '(("1")) (sqlite3-stream-read stream "SELECT * FROM hoge")))
+          (should-error (sqlite3-stream-read stream "SELECT"))
           ;; works fine after syntax error
-          (should (equal '(("1")) (sqlite3-stream-read-query stream "SELECT * FROM hoge")))
+          (should (equal '(("1")) (sqlite3-stream-read stream "SELECT * FROM hoge")))
           (should (sqlite3-file-guessed-database-p db)))
       (sqlite3-stream-close stream))))
 

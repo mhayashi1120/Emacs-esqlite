@@ -405,7 +405,7 @@ TODO safe-hook"
 (defun sqlite3-mode-query (query)
   (sqlite3-mode--check-stream)
   (let* ((stream (sqlite3-mode-ref :stream))
-         (data (sqlite3-stream-read-query stream query)))
+         (data (sqlite3-stream-read stream query)))
     data))
 
 (defun sqlite3-mode-stream-status ()

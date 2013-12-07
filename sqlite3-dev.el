@@ -29,7 +29,7 @@
            ;; Linux: 1.5 times
 
            (async-time (sqlite3-benchmark
-                         (sqlite3-stream-read-query sqlite3-dev-stream "SELECT * FROM hoge")))
+                         (sqlite3-stream-read sqlite3-dev-stream "SELECT * FROM hoge")))
            (rate (/ async-time base-time)))
       (push rate rates)
       (when (> rate limit)

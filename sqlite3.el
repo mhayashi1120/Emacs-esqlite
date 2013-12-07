@@ -794,7 +794,7 @@ Good: SELECT * FROM table1\n
 
 (defalias 'sqlite3-stream-execute-sql 'sqlite3-stream-send-sql)
 
-(defun sqlite3-stream-read-query (stream query)
+(defun sqlite3-stream-read (stream query)
   (unless (sqlite3-stream-alive-p stream)
     (error "Stream has been closed"))
   ;; handling NULL text
@@ -816,9 +816,9 @@ Good: SELECT * FROM table1\n
   (process-get stream 'sqlite3-accumulation))
 
 (defun sqlite3-stream-read-top (stream query)
-  "Convenience function with wrapping `sqlite3-stream-read-query' to get a first row
+  "Convenience function with wrapping `sqlite3-stream-read' to get a first row
 of the results."
-  (car-safe (sqlite3-stream-read-query stream query)))
+  (car-safe (sqlite3-stream-read stream query)))
 
 (defun sqlite3-stream-read-atom (stream query)
   "Convenience function with wrapping `sqlite3-stream-read-top' to get a first item
@@ -1072,7 +1072,7 @@ of the results."
              " WHERE 1 = 1 "
              ,@(and type
                     `(" AND type = %T{type}")))))
-         (data (sqlite3-stream-read-query stream query)))
+         (data (sqlite3-stream-read stream query)))
     (mapcar 'car data)))
 
 (defun sqlite3-read-views (stream)
@@ -1096,7 +1096,7 @@ Elements of the item list are:
 3. not null (boolean)
 4. default_value
 5. primary key (boolean)"
-  (loop for row in (sqlite3-stream-read-query
+  (loop for row in (sqlite3-stream-read
                     stream (sqlite3-format
                             "PRAGMA table_info(%o)"
                             table))

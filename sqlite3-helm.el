@@ -167,7 +167,7 @@ http://www.sqlite.org/lang_select.html"
   (condition-case err
       (mapcar
        'sqlite3-helm--construct-row
-       (sqlite3-stream-read-query stream query))
+       (sqlite3-stream-read stream query))
     (error
      (helm-log "Error: sqlite3 %s"
                (replace-regexp-in-string
