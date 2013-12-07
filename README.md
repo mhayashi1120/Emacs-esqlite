@@ -47,14 +47,9 @@ Respond as list of csv from synchronous process.
 
 [Function] sqlite3-read, sqlite3-read-top, sqlite3-read-atom
 
-sample:
-
     (sqlite3-read filename "SELECT * FROM hoge")
 
 =>  (("a" "b") ("c" "d"))
-
-
-
 
 ### Async Read API
 
@@ -67,11 +62,33 @@ sample: todo
     (sqlite3-async-read filename "SELECT * FROM hoge"
 	   (lambda (data) (message "%s" (mapcocnat 'identity data ", "))))
 	   
-TODO
-
 ### Construct SQL
 
+[Function] sqlite3-escape-string
+
+    (sqlite3-escape-string  "a'b")
+
+  => "a''b" 
+
 [Function] sqlite3-text
-[Function] sqlite3-escape-string 
+
+     (sqlite3-text "a'b")
+   
+   => "'a''b'"
+
 [Function] sqlite3-escape-like
+
+      (sqlite3-escape-like "F%OO_" ?\\)
+	  
+  => "F\\%OO\\_"
+
 [Function] sqlite3-format
+
+     (sqlite3-format
+       `(
+        "SELECT name "
+        " FROM sqlite_master "
+        " WHERE 1 = 1 "
+        ,@(and type
+               `(" AND type = %T{type}"))))
+
