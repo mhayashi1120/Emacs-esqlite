@@ -59,29 +59,28 @@
       (sqlite3-stream-close stream))))
 
 ;;TODO not yet working..
-;; (ert-deftest sqlite3-async-read ()
-;;   :tags '(sqlite3)
-;;   (let ((db (make-temp-file "sqlite3-test-")))
-;;     (unwind-protect
-;;         (progn
-;;           (sqlite3-async-execute db "CREATE TABLE hoge (id);" (lambda (x)))
-;;           (let ((query (mapconcat
-;;                         'identity
-;;                         (mapcar
-;;                          (lambda (n)
-;;                            (format "INSERT INTO hoge VALUES(%d);" n))
-;;                          '(1 2 3 4 5)) "")))
-;;             (sqlite3-async-read db query (lambda (x)))
-;;             (let ((result '()))
-;;               (sqlite3-async-read
-;;                db "SELECT id FROM hoge;"
-;;                (lambda (x)
-;;                  (unless (eq x :EOF)
-;;                    (setq result (cons (string-to-number (nth 0 x)) result)))))
-;;               (should (equal '(5 4 3 2 1) result)))
-;;             (should-error (sqlite3-async-read db "SELECT" (lambda (x))))))
-;;       (delete-file db)))
-;;   )
+(ert-deftest sqlite3-async-read ()
+  :tags '(sqlite3)
+  (let ((db (make-temp-file "sqlite3-test-")))
+    (unwind-protect
+        (progn
+          (sqlite3-async-execute db "CREATE TABLE hoge (id);" (lambda ()))
+          (let ((query (mapconcat
+                        'identity
+                        (mapcar
+                         (lambda (n)
+                           (format "INSERT INTO hoge VALUES(%d);" n))
+                         (number-sequence 1 5)) "")))
+            (sqlite3-async-read db query (lambda (x)))
+            (lexical-let ((result '()))
+              (sqlite3-async-read
+               db "SELECT id FROM hoge;"
+               (lambda (x)
+                 (if (eq x :EOF)
+                     (should (equal '(5 4 3 2 1) result))
+                   (setq result (cons (string-to-number (nth 0 x)) result))))))
+            (should-error (sqlite3-async-read db "SELECT" (lambda (x))))))
+      (delete-file db))))
 
 (ert-deftest sqlite3-read ()
   :tags '(sqlite3)

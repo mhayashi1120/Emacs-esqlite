@@ -85,7 +85,7 @@
                    (setq table (cdr pair))
                    nil)
                   (t
-                   (error "Not supported yet"))))))
+                   (error "sqlite3: Not supported yet"))))))
 
 (defun sqlite3--filter (filter list)
   (loop for o in list
@@ -124,7 +124,7 @@ Please download and install fakecygpty (Google it!!)"
   (with-temp-buffer
     (let ((code (call-process "cygpath" nil t nil "-t" type file)))
       (unless (= code 0)
-        (error "cygpath failed with %d" code))
+        (error "sqlite3: cygpath failed with %d" code))
       (goto-char (point-min))
       (buffer-substring
        (point-min) (point-at-eol)))))
@@ -397,7 +397,7 @@ Cygwin: FILE contains multibyte char, may fail to open FILE as database."
 
 (defun sqlite3--read-syntax-error-at-point ()
   (and (looking-at "^Error: \\(.*\\)")
-       (format "Sqlite3 Error: %s" (match-string 1))))
+       (format "sqlite3: %s" (match-string 1))))
 
 (defun sqlite3--maybe-raise-syntax-error (proc)
   (while (and (eq (process-status proc) 'run)
@@ -466,7 +466,7 @@ Delete csv data if reading was succeeded."
    ((listp object)
     (mapconcat 'sqlite3-format-value object ", "))
    (t
-    (error "Not a supported type %s" object))))
+    (error "sqlite3: Not a supported type %s" object))))
 
 (eval-and-compile
   (defvar sqlite3-format--table
@@ -541,7 +541,7 @@ e.g.
                  (fn (assoc-default spec sqlite3-format--table))
                  obj)
             (when (and varname (string-match "\\`sqlite3-" varname))
-              (error "Unable use sqlite3- prefix variable %s" varname))
+              (error "sqlite3: Unable use sqlite3- prefix variable %s" varname))
             ;; Delete formatter directive
             (delete-region (1- (point)) (match-end 0))
             (cond
@@ -552,9 +552,9 @@ e.g.
               (setq obj (car sqlite3-objects))
               (setq sqlite3-objects (cdr sqlite3-objects)))
              (t
-              (error "No value assigned to `%%%s'" spec)))
+              (error "sqlite3: No value assigned to `%%%s'" spec)))
             (unless fn
-              (error "Invalid format character: `%%%s'" spec))
+              (error "sqlite3: Invalid format character: `%%%s'" spec))
             (unless (functionp fn)
               (error "Assert"))
             (let ((val obj)
@@ -562,7 +562,7 @@ e.g.
               (setq text (funcall fn val))
               (insert text)))))))
     (when sqlite3-objects
-      (error "args out of range %s" sqlite3-objects))
+      (error "sqlite3: args out of range %s" sqlite3-objects))
     (buffer-string)))
 
 ;; http://www.sqlite.org/syntaxdiagrams.html#numeric-literal
@@ -701,7 +701,7 @@ This object style may be changed in future release."
 
 (defun sqlite3-stream-close (stream)
   (unless (process-get stream 'sqlite3-stream-process-p)
-    (error "Not a sqlite3 process"))
+    (error "sqlite3: Not a sqlite3 process"))
   (when (eq (process-status stream) 'run)
     (with-timeout (5 (kill-process stream))
       ;; DO NOT use `sqlite3-stream-send-command'
@@ -796,7 +796,7 @@ Good: SELECT * FROM table1\n
 
 (defun sqlite3-stream-read (stream query)
   (unless (sqlite3-stream-alive-p stream)
-    (error "Stream has been closed"))
+    (error "sqlite3: Stream has been closed"))
   ;; handling NULL text
   ;; Use different null text each time when executing query.
   (let ((nullvalue (sqlite3--temp-null query)))
@@ -864,7 +864,7 @@ this function.
 ARGS accept sqlite3 command arguments. (e.g. -header)"
   (sqlite3-check-program)
   (unless (stringp query)
-    (error "No query is provided"))
+    (error "sqlite3: No query is provided"))
   (let* ((proc (apply 'sqlite3-start-csv-process file query nil args)))
     (process-put proc 'sqlite3-filter filter)
     (set-process-filter proc 'sqlite3-async-read--filter)
@@ -901,7 +901,6 @@ ARGS accept sqlite3 command arguments. (e.g. -header)"
     (unless (memq (process-status proc) '(run))
       (kill-buffer (current-buffer)))))
 
-;;TODO test
 ;;;###autoload
 (defun sqlite3-async-execute (file query &optional finalize &rest args)
   "Utility function to wrap `sqlite3-async-read'
@@ -941,7 +940,7 @@ Other arguments are passed to `sqlite3-async-read'."
   (let ((stream (plist-get reader :stream))
         row)
     (unless (sqlite3-stream-alive-p stream)
-      (error "Stream is closed"))
+      (error "sqlite3: Stream has been closed"))
     (sqlite3-reader--step reader)))
 
 (defun sqlite3-reader--step (reader)
@@ -1038,7 +1037,7 @@ ARGS accept some of sqlite3 command arguments but do not use it
         (let ((errmsg (sqlite3--read-syntax-error-at-point)))
           (when errmsg
             (error "%s" errmsg)))
-        (error "%s" (buffer-string)))
+        (error "sqlite3: %s" (buffer-string)))
       (sqlite3--read-csv-with-deletion nullvalue))))
 
 ;;;###autoload
@@ -1134,7 +1133,7 @@ Elements of the item list are:
     (when (process-get proc 'sqlite3-stream-process-p)
       (condition-case err
           (sqlite3-stream-close proc)
-        (error (message "Sqlite3: %s" err)))))
+        (error (message "sqlite3: %s" err)))))
   (when (and (stringp sqlite3--default-init-file)
              (file-exists-p sqlite3--default-init-file))
     (delete-file sqlite3--default-init-file)))
