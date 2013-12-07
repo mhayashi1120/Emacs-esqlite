@@ -34,14 +34,7 @@ Programmer must manage the stream todo
 
 sample: todo
 
-### Reader API
-
-Read a query result each time program request.
-Must close this reader.
-
-sample: todo
-
-### Read API
+### Sync Read API
 
 Respond as list of csv from synchronous process.
 

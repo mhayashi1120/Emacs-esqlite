@@ -916,69 +916,6 @@ Other arguments are passed to `sqlite3-async-read'."
   nil)
 
 ;;;
-;;; Sqlite3 lazy reader
-;;;
-
-;;;###autoload
-(defun sqlite3-reader-open (file query)
-  ;; Open FILE with QUERY as sqlite3 database.
-  ;; sqlite3-reader-* family can handle the return object.
-  (let ((stream (sqlite3-stream-open file)))
-    (sqlite3-stream-send-command stream ".header" "ON")
-    (sqlite3-stream-send-sql stream query)
-    (list :stream stream :fields nil)))
-
-(defun sqlite3-reader-close (reader)
-  (let ((stream (plist-get reader :stream)))
-    (sqlite3-stream-close stream)))
-
-(defun sqlite3-reader-open-p (reader)
-  (let ((stream (plist-get reader :stream)))
-    (sqlite3-stream-alive-p stream)))
-
-(defun sqlite3-reader-read (reader)
-  (let ((stream (plist-get reader :stream))
-        row)
-    (unless (sqlite3-stream-alive-p stream)
-      (error "sqlite3: Stream has been closed"))
-    (sqlite3-reader--step reader)))
-
-(defun sqlite3-reader--step (reader)
-  (let* ((stream (plist-get reader :stream))
-         (nullvalue (process-get stream 'sqlite3-null-value))
-         row)
-    (catch 'eof
-      (with-current-buffer (process-buffer stream)
-        ;; wait until output comes.
-        (while (= (point-min) (point-max))
-          (sqlite3-sleep stream))
-        (goto-char (point-min))
-        (when (sqlite3-looking-at-prompt)
-          (sqlite3-reader-close reader)
-          (throw 'eof :EOF))
-        (unless (plist-get reader :fields)
-          ;; stock result of header
-          (let ((fields (sqlite3--read-csv-line-with-deletion nullvalue)))
-            (plist-put reader :fields fields)))
-        ;; read and delete it.
-        (setq row (sqlite3--read-csv-line-with-deletion nullvalue)))
-      row)))
-
-(defun sqlite3-reader-peek (reader)
-  "Utility to read a row from READER.
-This function may block."
-  (let* ((stream (plist-get reader :stream))
-         (nullvalue (process-get stream 'sqlite3-null-value))
-         row)
-    (with-current-buffer (process-buffer stream)
-      ;; wait until output comes.
-      (while (= (point-min) (point-max))
-        (sqlite3-sleep stream))
-      (unwind-protect
-          (sqlite3--read-csv-line nullvalue)
-        (goto-char (point-min))))))
-
-;;;
 ;;; Synchronous utilities
 ;;;
 

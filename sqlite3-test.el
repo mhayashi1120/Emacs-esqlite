@@ -95,43 +95,6 @@
           (should (equal "あイｳ" (sqlite3-read-atom db "SELECT text FROM hoge WHERE id = 1"))))
       (delete-file db))))
 
-(ert-deftest sqlite3-reader-0001 ()
-  :tags '(sqlite3)
-  (let* ((db (make-temp-file "sqlite3-test-")))
-    (unwind-protect
-        (progn
-          (sqlite3-execute db "CREATE TABLE table1(a,b,c)")
-          (sqlite3-execute db "INSERT INTO table1 VALUES (1,'A', NULL)")
-          (sqlite3-execute db "INSERT INTO table1 VALUES (2,'B', NULL)")
-          (let ((reader (sqlite3-reader-open db "SELECT * FROM table1 ORDER BY a")))
-            (unwind-protect
-                (progn
-                  (should (sqlite3-reader-open-p reader))
-                  (should (equal '("1" "A" :null) (sqlite3-reader-read reader)))
-                  ;;TODO
-                  (should (equal '("2" "B" :null) (sqlite3-reader-peek reader)))
-                  (should (equal '("2" "B" :null) (sqlite3-reader-read reader)))
-                  (should (equal :EOF (sqlite3-reader-read reader)))
-                  (should-not (sqlite3-reader-open-p reader)))
-              (sqlite3-reader-close reader))))
-      (delete-file db))))
-
-(ert-deftest sqlite3-reader-0002 ()
-  :tags '(sqlite3)
-  (let* ((db (make-temp-file "sqlite3-test-")))
-    (unwind-protect
-        (progn
-          (sqlite3-execute db "CREATE TABLE table1(a,b,c)")
-          (sqlite3-execute db "INSERT INTO table1 VALUES (1,'A', NULL)")
-          (let ((reader (sqlite3-reader-open db "SELECT * FROM table1")))
-            (unwind-protect
-                (progn
-                  (should (sqlite3-reader-open-p reader))
-                  (sqlite3-reader-close reader)
-                  (should-not (sqlite3-reader-open-p reader)))
-              (sqlite3-reader-close reader)))))))
-
-;;TODO reader test
 ;;TODO sqlite3-call/stream transaction
 
 (ert-deftest sqlite3-escape ()
