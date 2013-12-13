@@ -140,15 +140,20 @@
 
   (should (equal
            (concat
-            "SELECT "
-            "\"a\", \"b\",\"c\",'''text','something'"
-            " FROM \"table\""
-            " WHERE"
-            " \"d\" LIKE 'hoge' ESCAPE '\\' "
+            "SELECT \n"
+            "\"a\", \"b\",\"c\",'''text','something'\n"
+            " FROM \"table\"\n"
+            " WHERE\n"
+            " \"d\" LIKE 'hoge' ESCAPE '\\' \n"
             " AND col2 IN ('foo', 1)")
            (let ((search-text "hoge"))
              (sqlite3-format
-              "SELECT %O,%o,%T,%V FROM %o WHERE %o LIKE %L{search-text} AND col2 IN (%V)"
+              '("SELECT "
+                "%O,%o,%T,%V"
+                " FROM %o"
+                " WHERE"
+                " %o LIKE %L{search-text}"
+                " AND col2 IN (%V)")
               '("a" "b")
               "c" "'text"
               "something"
@@ -162,7 +167,15 @@
             '(
               "INSERT INTO (%O)"
               " VALUES (%V) ")
-            '("a" "b") '("1" 2)))))
+            '("a" "b") '("1" 2))))
+
+  ;; malicious name
+  (should
+   (equal 
+    "\"odd \"\" table\""
+    (sqlite3-format "%o" "odd \" table")))
+
+  )
 
 (ert-deftest sqlite3-number ()
   :tags '(sqlite3)

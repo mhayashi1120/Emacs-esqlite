@@ -5,7 +5,7 @@
 ;; URL: https://github.com/mhayashi1120/sqlite3.el/raw/master/sqlite3.el
 ;; Emacs: GNU Emacs 24 or later
 ;; Package-Requires: ((pcsv "1.3.3"))
-;; Version: 0.0.1
+;; Version: 0.1.0
 
 ;; This program is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU General Public License as
@@ -31,7 +31,6 @@
 ;; * sqlite3 process with being stationed
 ;; * Construct sqlite3 SQL.
 ;; * Escape SQL value to construct SQL
-;; * todo lazy reader
 ;; * Some of basic utilities.
 ;; * NULL handling (denote as :null keyword)
 
@@ -41,7 +40,6 @@
 
 ;;; TODO:
 ;; * blob
-;; * describe about :null
 
 ;;; Code:
 
@@ -219,10 +217,7 @@ Please download and install fakecygpty (Google it!!)"
 ;; process
 ;;
 
-(defvar sqlite3-default-coding-system
-  ;; TODO reconsider it
-  ;; -> portable db. (sjis db on windows)
-  ;; -> temporary change coding-system
+(defvar sqlite3-process-coding-system
   (let* ((syseol (let ((type (coding-system-eol-type
                               ;; guess sqlite3 command environment
                               default-terminal-coding-system)))
@@ -236,7 +231,8 @@ Please download and install fakecygpty (Google it!!)"
          (basecs 'utf-8)
          (cs
           (coding-system-change-eol-conversion basecs syseol)))
-    (cons cs cs)))
+    (cons cs cs))
+  "Temporarily change coding system by this hiding parameter.")
 
 (defconst sqlite3-prompt "sqlite> ")
 (defconst sqlite3-continue-prompt "")
@@ -278,7 +274,13 @@ Please download and install fakecygpty (Google it!!)"
   `(let ((process-environment (copy-sequence process-environment))
          ;; non pty resulting in echoing query.
          (process-connection-type t)
-         (default-process-coding-system sqlite3-default-coding-system))
+         (default-process-coding-system
+           (cond
+            ((consp sqlite3-process-coding-system)
+             sqlite3-process-coding-system)
+            ((coding-system-p sqlite3-process-coding-system)
+             (cons sqlite3-process-coding-system sqlite3-process-coding-system))
+            (t nil))))
      ;; currently no meanings of this
      ;; in the future release may support i18n.
      (setenv "LANG" "C")
@@ -490,7 +492,7 @@ Delete csv data if reading was succeeded."
         ("O" . (lambda (l)
                  (mapconcat (lambda (x) (sqlite3-format-object x))
                             l ", ")))
-        ;; some value (string, number, list) with properly quoted
+        ;; some value list (string, number, list) with properly quoted
         ("V" . sqlite3-format-value)
         ))))
 
@@ -679,15 +681,14 @@ To create the like pattern:
 (defun sqlite3-stream-filename (stream)
   (process-get stream 'sqlite3-filename))
 
-;;;###autoload
-(defun sqlite3-stream-open (file)
-  "Open FILE stream as sqlite3 database.
-Optional NULLVALUE indicate text expression of NULL. This option may improve
-the response of stream.
+(defun sqlite3-stream--reuse (file)
+  (loop with filename = (expand-file-name file)
+        for p in (process-list)
+        if (and (sqlite3-stream-alive-p p)
+                (string= (sqlite3-stream-filename p) filename))
+        return p))
 
-This function return process as stream object, but do not use this as a process object.
-This object style may be changed in future release."
-  (sqlite3-check-program)
+(defun sqlite3-stream--open (file)
   (let* ((stream (sqlite3-start-csv-process file)))
     (process-put stream 'sqlite3-stream-process-p t)
     ;; Do not show confirm prompt when exiting.
@@ -698,6 +699,17 @@ This object style may be changed in future release."
     (let ((inhibit-redisplay t))
       (sqlite3-stream--wait stream))
     stream))
+
+;;;###autoload
+(defun sqlite3-stream-open (file &optional force-open)
+  "Open FILE stream as sqlite3 database if not open.
+Optional FORCE-OPEN indicate do not reuse opened stream.
+
+This function return process as stream object, but do not use this as a process object.
+This object style may be changed in future release."
+  (sqlite3-check-program)
+  (or (and (not force-open) (sqlite3-stream--reuse file))
+      (sqlite3-stream--open file)))
 
 (defun sqlite3-stream-close (stream)
   (unless (process-get stream 'sqlite3-stream-process-p)
@@ -712,6 +724,9 @@ This object style may be changed in future release."
           (sqlite3-sleep stream)))))
   ;; delete process forcibly
   (delete-process stream))
+
+(defun sqlite3-stream-set-coding-system (stream decoding encoding)
+  (set-process-coding-system stream decoding encoding))
 
 (defun sqlite3-stream--filter (proc event)
   (sqlite3--with-parse proc event
@@ -1023,6 +1038,10 @@ of the results."
 (defun sqlite3-read-triggers (stream)
   (sqlite3-read--objects stream "trigger"))
 
+(defun sqlite3-read-table-columns (stream table)
+  (loop for (_r1 col . _ignore) in (sqlite3-read-table-schema stream table)
+        collect col))
+
 (defun sqlite3-read-table-schema (stream table)
   "Get TABLE information in FILE.
 Elements of the item list are:
@@ -1052,8 +1071,9 @@ Elements of the item list are:
 
 (defun sqlite3-file-table-columns (file table)
   "sqlite3 FILE TABLE columns"
-  (loop for (r1 col . ignore) in (sqlite3-file-table-schema file table)
-        collect col))
+  (sqlite3-call/stream file
+    (lambda (stream)
+      (sqlite3-read-table-columns stream table))))
 
 (defun sqlite3-file-table-schema (file table)
   "See `sqlite3-read-table-schema'"
@@ -1079,14 +1099,6 @@ Elements of the item list are:
   (remove-hook 'kill-emacs-hook 'sqlite3-killing-emacs))
 
 (add-hook 'kill-emacs-hook 'sqlite3-killing-emacs)
-
-;; TODO testing: reuse stream when `sqlite3-stream-open' or create new high level api?
-(defun sqlite3-stream--reuse (file)
-  (loop with filename = (expand-file-name file)
-        for p in (process-list)
-        if (and (sqlite3-stream-alive-p p)
-                (string= (sqlite3-stream-filename p) filename))
-        return p))
 
 (provide 'sqlite3)
 
