@@ -1,17 +1,17 @@
 
-(defconst sqlite3-dev-file (make-temp-name (expand-file-name "sqlite3-dev-" temporary-file-directory)))
-(defconst sqlite3-dev-try-count 10)
-(defconst sqlite3-dev-stream (sqlite3-stream-open sqlite3-dev-file))
+(defconst esqlite-dev-file (make-temp-name (expand-file-name "esqlite-dev-" temporary-file-directory)))
+(defconst esqlite-dev-try-count 10)
+(defconst esqlite-dev-stream (esqlite-stream-open esqlite-dev-file))
 
-(sqlite3-stream-execute sqlite3-dev-stream "CREATE TABLE hoge (id);")
+(esqlite-stream-execute esqlite-dev-stream "CREATE TABLE hoge (id);")
 (loop for start from 0 to 1000 by 100
-      do (sqlite3-stream-execute
-          sqlite3-dev-stream
+      do (esqlite-stream-execute
+          esqlite-dev-stream
           (format "INSERT INTO hoge VALUES %s;"
                   (mapconcat (lambda (x) (format "(%d)" x)) (number-sequence start (+ start 100)) ", " ))))
 
 
-(defmacro sqlite3-benchmark (&rest form)
+(defmacro esqlite-benchmark (&rest form)
   (declare (indent 0))
   `(let ((start (float-time)))
      (progn ,@form)
@@ -21,9 +21,9 @@
 (let ((overcount 0)
       (rates nil)
       (limit 1.5))
-  (dotimes (i sqlite3-dev-try-count)
-    (let* ((base-time (sqlite3-benchmark 
-                        (sqlite3-read sqlite3-dev-file "SELECT * FROM hoge")))
+  (dotimes (i esqlite-dev-try-count)
+    (let* ((base-time (esqlite-benchmark 
+                        (esqlite-read esqlite-dev-file "SELECT * FROM hoge")))
 
            ;; stream api is not enough fast. because serialize cost too high.. 
            ;; aim at least 5 times cost above syncronous interface.
@@ -31,30 +31,30 @@
            ;; CYGWIN_NT-6.1-WOW64: 3 times
            ;; Linux: 1.5 times
 
-           (async-time (sqlite3-benchmark
-                         (sqlite3-stream-read sqlite3-dev-stream "SELECT * FROM hoge")))
+           (async-time (esqlite-benchmark
+                         (esqlite-stream-read esqlite-dev-stream "SELECT * FROM hoge")))
            (rate (/ async-time base-time)))
       (push rate rates)
       (when (> rate limit)
         (incf overcount))))
-  (should (> (/ sqlite3-dev-try-count 2) overcount))
+  (should (> (/ esqlite-dev-try-count 2) overcount))
   (list overcount rates))
 
 
 ;; some of GUI tool query planner
   
-(defun sqlite3-planner-mode ()
+(defun esqlite-planner-mode ()
   )
 
-(defun sqlite3-planner (file sql)
-  (let ((explain (sqlite3-read
+(defun esqlite-planner (file sql)
+  (let ((explain (esqlite-read
                   file (format "EXPLAIN %s" sql)
                   "-header"))
-        (plan (sqlite3-read
+        (plan (esqlite-read
                file (format "EXPLAIN QUERY PLAN %s" sql)
                "-header"))
         ;;TODO
-        (stats (sqlite3-read
+        (stats (esqlite-read
                 file sql
                 "-stats")))
     (list explain plan stats)))
@@ -65,12 +65,12 @@
 ;;;
 
 ;;TODO remove until future
-(defvar sqlite3--signal-support 'unknown)
+(defvar esqlite--signal-support 'unknown)
 
-(when (eq sqlite3--signal-support 'unknown)
+(when (eq esqlite--signal-support 'unknown)
   (ignore-errors
-    (let* ((file (make-temp-file "emacs-sqlite3-"))
-           (process (sqlite3-start-csv-process file "SELECT 1")))
+    (let* ((file (make-temp-file "emacs-esqlite-"))
+           (process (esqlite-start-csv-process file "SELECT 1")))
       (unwind-protect
           (progn
             (and
@@ -84,16 +84,16 @@
                (sleep-for 0.1))
              ;; re-check status
              (eq (process-status process) 'run)
-             (setq sqlite3--signal-support 'support)))
+             (setq esqlite--signal-support 'support)))
         (delete-process process)
         (kill-buffer (process-buffer process))
         (delete-file file)))))
 
-(defun sqlite3-stream-suspend (stream)
+(defun esqlite-stream-suspend (stream)
   ;; TODO  SIGSTOP
   (signal-process stream 19))
 
-(defun sqlite3-stream-continue (stream)
+(defun esqlite-stream-continue (stream)
   ;; TODO  SIGCONT
   (signal-process stream 18))
 
