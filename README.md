@@ -1,26 +1,6 @@
 Emacs sqlite3
 =============
 
-## UI
-
-### Edit cell
-
-TODO when enter the cell edit start transaction
-TODO discard (rollback edited)
-
-
-### Add row
-
-TODO
-
-### Delete row
-
-TODO
-
-### Commit transaction
-
-TODO
-
 ## API
 
 ### Stream API
@@ -85,3 +65,9 @@ sample: todo
         ,@(and type
                `(" AND type = %T{type}"))))
 
+
+## Helm
+
+TODO helm url
+
+todo sample of definitions helm
