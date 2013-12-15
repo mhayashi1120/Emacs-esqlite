@@ -1,8 +1,8 @@
-;;; esqlite.el --- esqlite file manipulate utilities
+;;; esqlite.el --- sqlite file manipulate utilities
 
 ;; Author: Masahiro Hayashi <mhayashi1120@gmail.com>
 ;; Keywords: data
-;; URL: https://github.com/mhayashi1120/Emacs-sqlite/raw/master/esqlite.el
+;; URL: https://github.com/mhayashi1120/Emacs-esqlite/raw/master/esqlite.el
 ;; Emacs: GNU Emacs 24 or later
 ;; Package-Requires: ((pcsv "1.3.3"))
 ;; Version: 0.1.0
@@ -24,7 +24,8 @@
 
 ;;; Commentary:
 
-;; esqlite.el is a implementation to handle esqlite database.
+;; esqlite.el is a implementation to handle sqlite database.
+;;  (version 3 or later)
 ;; Following functions are provided:
 ;; * Read sqlite row as list of string.
 ;; * Async read sqlite row as list of string.
@@ -36,6 +37,7 @@
 
 ;;; Install:
 
+;; Please install sqlite command.
 ;; Please install from ELPA. (TODO url)
 
 ;;; TODO:
@@ -53,7 +55,7 @@
   :prefix "esqlite-"
   :group 'applications)
 
-(defcustom esqlite-program "sqlite3"
+(defcustom esqlite-sqlite-program "sqlite3"
   "Command name or path to command.
 Default is the head of sqlite."
   :group 'esqlite
@@ -108,7 +110,7 @@ Please download and install fakecygpty (Google it!!)"
 (defun esqlite-mswin-cygwin-p ()
   (and (memq system-type '(windows-nt))
        (executable-find "cygpath")
-       (let ((program (executable-find esqlite-program)))
+       (let ((program (executable-find esqlite-sqlite-program)))
          (and program
               ;; check program is under the cygwin installed directory.
               (let* ((rootdir
@@ -202,19 +204,17 @@ Please download and install fakecygpty (Google it!!)"
          (insert-file-contents file nil 0 256)
          (looking-at esqlite-file-header-regexp))))
 
-;;TODO name
 ;;;###autoload
-(defun esqlite-installed-p ()
-  "Return non-nil if `esqlite-program' is installed."
-  (and (stringp esqlite-program)
-       (executable-find esqlite-program)))
+(defun esqlite-sqlite-installed-p ()
+  "Return non-nil if `esqlite-sqlite-program' is installed."
+  (and (stringp esqlite-sqlite-program)
+       (executable-find esqlite-sqlite-program)))
 
-;;TODO name
-(defun esqlite-check-program ()
-  (unless (stringp esqlite-program)
-    (error "No valid esqlite program"))
-  (unless (executable-find esqlite-program)
-    (error "%s not found" esqlite-program)))
+(defun esqlite-check-sqlite-program ()
+  (unless (stringp esqlite-sqlite-program)
+    (error "esqlite: No valid esqlite program"))
+  (unless (executable-find esqlite-sqlite-program)
+    (error "esqlite: %s not found" esqlite-sqlite-program)))
 
 ;;
 ;; process
@@ -282,7 +282,8 @@ Please download and install fakecygpty (Google it!!)"
             ((consp esqlite-process-coding-system)
              esqlite-process-coding-system)
             ((coding-system-p esqlite-process-coding-system)
-             (cons esqlite-process-coding-system esqlite-process-coding-system))
+             (cons esqlite-process-coding-system
+                   esqlite-process-coding-system))
             (t nil))))
      ;; currently no meanings of this
      ;; in the future release may support i18n.
@@ -316,7 +317,7 @@ This form check syntax error report from esqlite command."
 
 (defun esqlite-start-process (buffer &rest args)
   (esqlite--with-env
-   (let ((cmdline (cons esqlite-program args))
+   (let ((cmdline (cons esqlite-sqlite-program args))
          (cygwinp (esqlite-mswin-cygwin-p)))
      (when cygwinp
        (unless esqlite-mswin-fakecygpty-program
@@ -329,7 +330,8 @@ This form check syntax error report from esqlite command."
 
 (defun esqlite-call-process-region (buffer start end &rest args)
   (esqlite--with-env
-   (apply 'call-process-region start end esqlite-program nil buffer nil args)))
+   (apply 'call-process-region
+          start end esqlite-sqlite-program nil buffer nil args)))
 
 (defun esqlite-expand-db-name (file)
   (if (esqlite-mswin-cygwin-p)
@@ -546,7 +548,8 @@ e.g.
                  (fn (assoc-default spec esqlite-format--table))
                  obj)
             (when (and varname (string-match "\\`esqlite-" varname))
-              (error "esqlite: Unable use esqlite- prefix variable %s" varname))
+              (error "esqlite: Unable use esqlite- prefix variable %s"
+                     varname))
             ;; Delete formatter directive
             (delete-region (1- (point)) (match-end 0))
             (cond
@@ -561,7 +564,7 @@ e.g.
             (unless fn
               (error "esqlite: Invalid format character: `%%%s'" spec))
             (unless (functionp fn)
-              (error "Assert"))
+              (error "esqlite: Assert"))
             (let ((val obj)
                   text)
               (setq text (funcall fn val))
@@ -636,11 +639,13 @@ Optional QUOTE-CHAR arg indicate quote-char
 
 e.g.
 \(let ((user-input \"a\\\"'b\"))
-  (format \"SELECT * FROM T WHERE a = '%s'\" (esqlite-escape-string user-input ?\\')))
+  (format \"SELECT * FROM T WHERE a = '%s'\" \
+\(esqlite-escape-string user-input ?\\')))
   => \"SELECT * FROM T WHERE a = 'a\\\"''b'\"
 
 \(let ((user-input \"a\\\"'b\"))
-  (format \"SELECT * FROM T WHERE a = \\\"%s\\\"\" (esqlite-escape-string user-input ?\\\")))
+  (format \"SELECT * FROM T WHERE a = \\\"%s\\\"\" \
+\(esqlite-escape-string user-input ?\\\")))
   => \"SELECT * FROM T WHERE a = \\\"a\\\"\\\"'b\\\"\"
 "
   (setq quote-char (or quote-char ?\'))
@@ -708,9 +713,10 @@ To create the like pattern:
   "Open FILE stream as esqlite database if not open.
 Optional FORCE-OPEN indicate do not reuse opened stream.
 
-This function return process as stream object, but do not use this as a process object.
-This object style may be changed in future release."
-  (esqlite-check-program)
+This function return process as stream object, but
+ do not use this as a process object. This object style
+ may be changed in future release."
+  (esqlite-check-sqlite-program)
   (or (and (not force-open) (esqlite-stream--reuse file))
       (esqlite-stream--open file)))
 
@@ -835,12 +841,14 @@ Good: SELECT * FROM table1\n
 
 (defun esqlite-stream-read-top (stream query)
   "Convenience function with wrapping `esqlite-stream-read' to get a first row
-of the results."
+of the results.
+
+No performance advantage. You need to choose LIMIT statement by your own."
   (car-safe (esqlite-stream-read stream query)))
 
 (defun esqlite-stream-read-atom (stream query)
-  "Convenience function with wrapping `esqlite-stream-read-top' to get a first item
-of the results."
+  "Convenience function with wrapping `esqlite-stream-read-top'
+to get a first item of the results."
   (car-safe (esqlite-stream-read-top stream query)))
 
 ;; wait until prompt to buffer
@@ -880,7 +888,7 @@ FILTER called with one arg that is parsed csv line or `:EOF'.
 If QUERY contains syntax error, raise the error result before return from
 this function.
 ARGS accept esqlite command arguments. (e.g. -header)"
-  (esqlite-check-program)
+  (esqlite-check-sqlite-program)
   (unless (stringp query)
     (error "esqlite: No query is provided"))
   (let* ((proc (apply 'esqlite-start-csv-process file query nil args)))
@@ -982,7 +990,7 @@ This function designed with SELECT QUERY, but works fine another
 ARGS accept some of esqlite command arguments but do not use it
  unless you understand what you are doing.
 "
-  (esqlite-check-program)
+  (esqlite-check-sqlite-program)
   (with-temp-buffer
     (let* ((nullvalue (esqlite--temp-null query))
            (exit-code (apply 'esqlite-call-csv-process
@@ -991,14 +999,17 @@ ARGS accept some of esqlite command arguments but do not use it
       (unless (eq exit-code 0)
         (let ((errmsg (esqlite--read-syntax-error-at-point)))
           (when errmsg
-            (error "%s" errmsg)))
+            (error "esqlite: %s" errmsg)))
+        ;; raise error anyway
         (error "esqlite: %s" (buffer-string)))
       (esqlite--read-csv-with-deletion nullvalue))))
 
 ;;;###autoload
 (defun esqlite-read-top (file query &rest args)
   "Convenience function with wrapping `esqlite-read' to get a first row
-of the results."
+of the results.
+
+No performance advantage. You need to choose LIMIT statement by your own."
   (car-safe (apply 'esqlite-read file query args)))
 
 ;;;###autoload

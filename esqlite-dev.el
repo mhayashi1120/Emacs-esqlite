@@ -100,3 +100,50 @@
 ;; TODO I can't get clue.
 ;;    esh-proc.el: eshell-continue-process, eshell-stop-process says stop status is not yet supported.
 
+
+
+(defun esqlite-create-alternate-table (stream create-sql)
+  "Execute CREATE-SQL in STREAM. This function not begin transaction.
+If you need transaction, begin transaction by your own before calling this function."
+  (unless (let ((case-fold-search t))
+            (string-match "^[ \t\n]*create[ \t\n]+table[ \t\n]+\\([^ \t\n]+\\)" create-sql))
+    (user-error "esqlite: Invalid create sql `%s'" create-sql))
+  (let* ((table (match-string 1 create-sql))
+         (temp-table (esqlite--unique-name stream table))
+         (src-columns (mapcar
+                       (lambda (x) (nth 1 x))
+                       (esqlite-read-table-schema stream table))))
+    (unless src-columns
+      (error "esqlite: Unable to get `%s' table columns" table))
+    (let ((temp-create (esqlite-format
+                        "CREATE TEMPORARY TABLE %o (%O)"
+                        temp-table src-columns)))
+      (esqlite-stream-execute stream temp-create))
+    (let ((temp-insert (esqlite-format
+                        "INSERT INTO %o SELECT %O FROM %o"
+                        temp-table src-columns table)))
+      (esqlite-stream-execute stream temp-insert))
+    (let ((drop-object (esqlite-format
+                        "DROP TABLE %o"
+                        table)))
+      (esqlite-stream-execute stream drop-object))
+    (esqlite-stream-execute stream create-sql)
+    (let* ((new-columns (mapcar
+                         (lambda (x) (nth 1 x))
+                         (esqlite-read-table-schema stream table)))
+           (share-columns (delq nil
+                                (mapcar
+                                 (lambda (col)
+                                   (and (member col src-columns)
+                                        col))
+                                 new-columns)))
+           (insert-object (esqlite-format
+                           "INSERT INTO %o (%O) SELECT %O FROM %o"
+                           table share-columns share-columns
+                           temp-table)))
+      (esqlite-stream-execute stream insert-object))
+    (let ((drop-temp (esqlite-format
+                      "DROP TABLE %o"
+                      temp-table)))
+      (esqlite-stream-execute stream drop-temp))))
+

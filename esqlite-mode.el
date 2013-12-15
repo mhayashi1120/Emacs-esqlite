@@ -2,7 +2,7 @@
 
 ;; Author: Masahiro Hayashi <mhayashi1120@gmail.com>
 ;; Keywords: data
-;; URL: https://github.com/mhayashi1120/Emacs-sqlite/raw/master/esqlite-mode.el
+;; URL: https://github.com/mhayashi1120/Emacs-esqlite/raw/master/esqlite-mode.el
 ;; Emacs: GNU Emacs 24 or later
 ;; Version: 0.0.1
 ;; Package-Requires: ((esqlite "0.1.0") (esqlite-helm "0.1.0"))
@@ -29,7 +29,7 @@
 
 ;;; Install:
 
-;; (autoload 'esqlite-find-file "esqlite"
+;; (autoload 'esqlite-find-file "esqlite-mode"
 ;;   "Open FILE as a Esqlite database" t)
 
 ;;; TODO:
@@ -857,11 +857,12 @@ Do not send compound statement or containing comment sql.
   (esqlite-table-mode-set nil :source :view :orders)
   (esqlite-table-mode-redraw-page))
 
-;;TODO immitate excel autofill
 ;;TODO consider cell datatype
 ;;TODO compare > < <= >=
 (defun esqlite-table-mode-easy-filter ()
-  ""
+  "
+
+This function immitate spread-sheet app autofill."
   (interactive)
   (esqlite-mode--before-transit-row)
   (let ((cell (get-text-property (point) 'esqlite-mode-cell)))
@@ -908,8 +909,8 @@ Do not send compound statement or containing comment sql.
 (defun esqlite-table-mode-helm--search (like)
   (let ((source
          (esqlite-helm-define
-          `((esqlite-db . ,(esqlite-mode-ref :stream))
-            (esqlite-composer
+          `((sqlite-db . ,(esqlite-mode-ref :stream))
+            (sqlite-composer
              .
              (lambda (pattern)
                (esqlite-table-mode-helm-compose-query pattern ,like)))
@@ -2484,51 +2485,6 @@ should not open huge file. This function support to open such file."
 
 
 ;;;; TODO TESTING
-
-(defun esqlite-create-alternate-table (stream create-sql)
-  "Execute CREATE-SQL in STREAM. This function not begin transaction.
-If you need transaction, begin transaction by your own before calling this function."
-  (unless (let ((case-fold-search t))
-            (string-match "^[ \t\n]*create[ \t\n]+table[ \t\n]+\\([^ \t\n]+\\)" create-sql))
-    (user-error "Invalid create sql `%s'" create-sql))
-  (let* ((table (match-string 1 create-sql))
-         (temp-table (esqlite--unique-name stream table))
-         (src-columns (mapcar
-                       (lambda (x) (nth 1 x))
-                       (esqlite-read-table-schema stream table))))
-    (unless src-columns
-      (error "Unable to get `%s' table columns" table))
-    (let ((temp-create (esqlite-format
-                        "CREATE TEMPORARY TABLE %o (%O)"
-                        temp-table src-columns)))
-      (esqlite-stream-execute stream temp-create))
-    (let ((temp-insert (esqlite-format
-                        "INSERT INTO %o SELECT %O FROM %o"
-                        temp-table src-columns table)))
-      (esqlite-stream-execute stream temp-insert))
-    (let ((drop-object (esqlite-format
-                        "DROP TABLE %o"
-                        table)))
-      (esqlite-stream-execute stream drop-object))
-    (esqlite-stream-execute stream create-sql)
-    (let* ((new-columns (mapcar
-                         (lambda (x) (nth 1 x))
-                         (esqlite-read-table-schema stream table)))
-           (share-columns (delq nil
-                                (mapcar
-                                 (lambda (col)
-                                   (and (member col src-columns)
-                                        col))
-                                 new-columns)))
-           (insert-object (esqlite-format
-                           "INSERT INTO %o (%O) SELECT %O FROM %o"
-                           table share-columns share-columns
-                           temp-table)))
-      (esqlite-stream-execute stream insert-object))
-    (let ((drop-temp (esqlite-format
-                      "DROP TABLE %o"
-                      temp-table)))
-      (esqlite-stream-execute stream drop-temp))))
 
 ;;TODO non used
 (defun esqlite-mode--faced-insert (face &rest args)
