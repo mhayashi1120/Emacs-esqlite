@@ -89,7 +89,7 @@ If SOURCE doesn't contain `sqlite-async', you should add LIMIT statement
  See the syntax of LIMIT statement.
 http://www.sqlite.org/lang_select.html
 
-Examples:
+Example:
 \(helm (esqlite-helm-define
          `((sqlite-db . \"/path/to/some/sqlite.db\")
            (sqlite-table . \"tbl1\"))))

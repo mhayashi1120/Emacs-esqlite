@@ -1,5 +1,6 @@
-Emacs sqlite3
-=============
+sqlite manipulation for Emacs
+=============================
+
 
 ## API
 
@@ -8,19 +9,24 @@ Emacs sqlite3
 staying permanently as emacs subprocess
 Programmer must manage the stream todo
 
-[Function] sqlite3-stream-open
-[Function] sqlite3-stream-read, sqlite3-stream-read-top, sqlite3-stream-read-atom
-[Function] sqlite3-stream-close
+[Function] esqlite-stream-open
+[Function] esqlite-stream-read, esqlite-stream-read-top, esqlite-stream-read-atom
+[Function] esqlite-stream-close
 
-sample: todo
+sample:
+
+    (setq my-stream (esqlite-stream-open "database.sqlite"))
+    (unwind-protect
+        (esqlite-stream-read my-stream "SELECT * FROM hoge")
+      (esqlite-stream-close my-stream))
 
 ### Sync Read API
 
 Respond as list of csv from synchronous process.
 
-[Function] sqlite3-read, sqlite3-read-top, sqlite3-read-atom
+[Function] esqlite-read, esqlite-read-top, esqlite-read-atom
 
-    (sqlite3-read filename "SELECT * FROM hoge")
+    (esqlite-read "database.sqlite" "SELECT * FROM hoge")
 
 =>  (("a" "b") ("c" "d"))
 
@@ -28,36 +34,34 @@ Respond as list of csv from synchronous process.
 
 Respond as csv line from async subprocess, each time result is arrived.
 
-sample: todo
+sample:
 
-
-
-    (sqlite3-async-read filename "SELECT * FROM hoge"
+    (esqlite-async-read "database.sqlite" "SELECT * FROM hoge"
 	   (lambda (data) (message "%s" (mapcocnat 'identity data ", "))))
 	   
 ### Construct SQL
 
-[Function] sqlite3-escape-string
+[Function] esqlite-escape-string
 
-    (sqlite3-escape-string  "a'b")
+    (esqlite-escape-string  "a'b")
 
   => "a''b" 
 
-[Function] sqlite3-text
+[Function] esqlite-format-text
 
-     (sqlite3-text "a'b")
+     (esqlite-text "a'b")
    
-   => "'a''b'"
+  => "'a''b'"
 
-[Function] sqlite3-escape-like
+[Function] esqlite-escape-like
 
-      (sqlite3-escape-like "F%OO_" ?\\)
+      (esqlite-escape-like "F%OO_" ?\\)
 	  
   => "F\\%OO\\_"
 
-[Function] sqlite3-format
+[Function] esqlite-format
 
-     (sqlite3-format
+     (esqlite-format
        `(
         "SELECT name "
         " FROM sqlite_master "
@@ -65,9 +69,11 @@ sample: todo
         ,@(and type
                `(" AND type = %T{type}"))))
 
-
 ## Helm
 
-TODO helm url
+To construct helm source from sqlite database.
 
-todo sample of definitions helm
+https://github.com/emacs-helm/helm
+
+[Function] esqlite-helm-define
+

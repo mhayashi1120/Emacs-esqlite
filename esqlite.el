@@ -56,13 +56,13 @@
 (require 'pcsv)
 
 (defgroup esqlite ()
-  "Manipulate esqlite database."
+  "Manipulate sqlite database."
   :prefix "esqlite-"
   :group 'applications)
 
 (defcustom esqlite-sqlite-program "sqlite3"
   "Command name or path to command.
-Default is the head of sqlite."
+Default is the latest release of sqlite."
   :group 'esqlite
   :type '(choice file string))
 
