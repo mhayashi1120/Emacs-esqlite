@@ -290,11 +290,11 @@ Example:
          (oneline (replace-regexp-in-string "\n" " " text)))
     (truncate-string-to-width oneline (or width (window-width)))))
 
-;;TODO regexp-quote
+;;FIXME regexp-quote
 (defun esqlite-helm-glob-to-regexp (glob &optional escape-char)
   (esqlite-parse-replace
    glob
-   '((?* . ".*")                        ;TODO greedy?
+   '((?* . ".*")
      (?? . ".?")
      (?\\ (?* . "*") (?\? . "?") (?\\ . "\\")))))
 
