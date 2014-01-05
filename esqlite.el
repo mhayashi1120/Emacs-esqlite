@@ -26,6 +26,7 @@
 
 ;; esqlite.el is a implementation to handle sqlite database.
 ;;  (version 3 or later)
+
 ;; Following functions are provided:
 ;; * Read sqlite row as list of string.
 ;; * Async read sqlite row as list of string.
@@ -35,13 +36,17 @@
 ;; * Some of basic utilities.
 ;; * NULL handling (denote as :null keyword)
 
+;; Following environments are tested:
+;; * Windows7 cygwin64 (sqlite 3.8.2)
+;; * Windows7 native binary (Not enough works)
+;; * Debian Linux (sqlite 3.7.13)
+
 ;;; Install:
 
 ;; Please install sqlite command.
-;; Please install from ELPA. (TODO url)
+;; Please install from MELPA. (http://melpa.milkbox.net/)
 
 ;;; TODO:
-;; * blob
 
 ;;; Code:
 
@@ -65,20 +70,42 @@ Default is the head of sqlite."
 ;;; Basic utilities
 ;;;
 
-(defun esqlite--replace (string init-table)
-  (loop with table = init-table
-        with res
+(put 'esqlite-error 'error-conditions
+     '(error esqlite-error))
+(put 'esqlite-error 'error-message "esqlite")
+
+(put 'esqlite-unterminate-query 'error-conditions
+     '(error esqlite-error esqlite-unterminate-query))
+(put 'esqlite-unterminate-query 'error-message "esqlite fatal")
+
+(defun esqlite--error (fmt &rest args)
+  (let ((msg (apply 'format fmt args)))
+    (signal 'esqlite-error (list msg))))
+
+(defun esqlite--fatal (symbol fmt &rest args)
+  (let ((msg (apply 'format fmt args)))
+    (signal symbol (list msg))))
+
+(defun esqlite-parse-replace (string replace-table)
+  (loop with table = replace-table
         with prev
+        with constructor =
+        (if (multibyte-string-p string)
+            'concat
+          (lambda (lis)
+            (apply 'unibyte-string lis)))
         for c across string
         concat (let ((pair (assq c table)))
                  (cond
                   ((not pair)
-                   (setq table init-table)
+                   (setq table replace-table)
                    (prog1
-                       (concat (nreverse prev) (char-to-string c))
+                       (funcall constructor (nreverse (cons c prev)))
                      (setq prev nil)))
                   ((stringp (cdr pair))
-                   (setq table init-table)
+                   (when (multibyte-string-p (cdr pair))
+                     (esqlite--error "Assert (must be a unibyte)"))
+                   (setq table replace-table)
                    (setq prev nil)
                    (cdr pair))
                   ((consp (cdr pair))
@@ -86,19 +113,14 @@ Default is the head of sqlite."
                    (setq table (cdr pair))
                    nil)
                   (t
-                   (error "esqlite: Not supported yet"))))))
-
-(defun esqlite--filter (filter list)
-  (loop for o in list
-        if (funcall filter o)
-        collect o))
+                   (esqlite--error "Assert (Not supported type)"))))))
 
 ;;;
 ;;; System deps
 ;;;
 
-(defcustom esqlite-mswin-fakecygpty-program nil
-  "esqlite on cygwin cannot work since no pty.
+(defcustom esqlite-mswin-fakecygpty-program "fakecygpty.exe"
+  "sqlite command on cygwin cannot work since no pty.
 Please download and install fakecygpty (Google it!!)"
   :group 'esqlite
   :type '(choice file string))
@@ -125,7 +147,7 @@ Please download and install fakecygpty (Google it!!)"
   (with-temp-buffer
     (let ((code (call-process "cygpath" nil t nil "-t" type file)))
       (unless (= code 0)
-        (error "esqlite: cygpath failed with %d" code))
+        (esqlite--error "cygpath failed with %d" code))
       (goto-char (point-min))
       (buffer-substring
        (point-min) (point-at-eol)))))
@@ -163,7 +185,7 @@ Please download and install fakecygpty (Google it!!)"
                      (b64 (base64-encode-string unibytes t)))
                 (substring b64 0 length)))))
 
-(defun esqlite--unique-name (stream prefix &optional seed)
+(defun esqlite-unique-name (stream prefix &optional seed)
   (loop with objects = (esqlite-read--objects stream)
         with full-name
         while (let ((random-text (esqlite--random-text (or seed "") 40)))
@@ -171,14 +193,21 @@ Please download and install fakecygpty (Google it!!)"
                 (member full-name objects))
         finally return full-name))
 
-(defun esqlite-terminate-command (command)
+(defun esqlite--check-control-code (command)
+   ;; except TAB, CR, LF
+  (when (string-match "[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]" command)
+    (error "Invalid sql statement (May cause stall the process)")))
+
+(defun esqlite--terminate-command (command)
+  (esqlite--check-control-code command)
   (cond
    ((not (string-match "\n\\'" command))
     (concat command "\n"))
    (t
     command)))
 
-(defun esqlite-terminate-statement (sql)
+(defun esqlite--terminate-statement (sql)
+  (esqlite--check-control-code sql)
   (cond
    ((not (string-match ";[ \t\n]*\\'" sql))
     (concat sql ";\n"))
@@ -190,15 +219,16 @@ Please download and install fakecygpty (Google it!!)"
 ;; constant / system dependent
 ;;
 
-(defconst esqlite--rowid-columns
+(defconst esqlite-rowid-columns
   '("_ROWID_" "ROWID" "OID"))
 
 ;;;###autoload
-(defconst esqlite-file-header-regexp "\\`SQLite format 3\000")
+(defconst esqlite-file-header-regexp "\\`SQLite format 3\x00"
+  "Now support only Sqlite3.")
 
 ;;;###autoload
 (defun esqlite-file-guessed-database-p (file)
-  "Guess the FILE is a esqlite database or not."
+  "Guess the FILE is a Sqlite database or not."
   (and (file-regular-p file)
        (with-temp-buffer
          (insert-file-contents file nil 0 256)
@@ -212,9 +242,18 @@ Please download and install fakecygpty (Google it!!)"
 
 (defun esqlite-check-sqlite-program ()
   (unless (stringp esqlite-sqlite-program)
-    (error "esqlite: No valid esqlite program"))
+    (esqlite--error "No valid sqlite program"))
   (unless (executable-find esqlite-sqlite-program)
-    (error "esqlite: %s not found" esqlite-sqlite-program)))
+    (esqlite--error "%s not found" esqlite-sqlite-program)))
+
+(defun esqlite-sqlite-version ()
+  "Get sqlite command version as string."
+  (with-temp-buffer
+    (call-process esqlite-sqlite-program nil t nil "--version")
+    (goto-char (point-min))
+    (unless (looking-at "\\([0-9.]+\\)")
+      (error "Version not found"))
+    (match-string 1)))
 
 ;;
 ;; process
@@ -230,31 +269,68 @@ Please download and install fakecygpty (Google it!!)"
                      type)
                     ((vectorp type)
                      (coding-system-eol-type (aref type 0))))))
-         ;; utf-8 as a default coding-system of esqlite database.
+         ;; utf-8 as the default coding-system of Sqlite database.
          (basecs 'utf-8)
          (cs
           (coding-system-change-eol-conversion basecs syseol)))
     (cons cs cs))
-  "Temporarily change coding system by this hiding parameter.")
+  "Temporarily change coding system by this hiding parameter.
+Normally, no need to use this parameter.")
 
-(defconst esqlite-prompt "sqlite> ")
-(defconst esqlite-continue-prompt "")
+(defun esqlite--process-coding-system ()
+  (cond
+   ((consp esqlite-process-coding-system)
+    esqlite-process-coding-system)
+   ((coding-system-p esqlite-process-coding-system)
+    (cons esqlite-process-coding-system
+          esqlite-process-coding-system))
+   (t default-process-coding-system)))
 
-(defun esqlite-prompt-p ()
+(eval-when-compile
+  (defconst esqlite--prompt "sqlite> "))
+
+;; continue prompt is empty.
+;; otherwise, first row of SELECT contains the continue prompt.
+(eval-when-compile
+  (defconst esqlite--prompt-continue "   ...> "))
+
+(defconst esqlite--prompt-re-any-continue
+  (eval-when-compile
+    (concat
+     "\\("
+     (regexp-opt (list esqlite--prompt esqlite--prompt-continue))
+     "*"
+     (regexp-quote esqlite--prompt-continue)
+     "\\)")))
+
+(defconst esqlite--prompt-re-any-proceeding
+  (eval-when-compile
+    (concat
+     "\\("
+     (regexp-opt (list esqlite--prompt esqlite--prompt-continue))
+     "+\\)"
+     ;; there is some char after continue/prompt
+     ".")))
+
+(defconst esqlite--prompt-re-next
+  (eval-when-compile
+    (concat
+     "\\("
+     (regexp-opt (list esqlite--prompt esqlite--prompt-continue))
+     "*\\)"
+     (regexp-quote esqlite--prompt)
+     "\\'")))
+
+(defun esqlite--prompt-eob (regexp)
   (save-excursion
     (goto-char (point-max))
     (forward-line 0)
-    ;; when executed sql contains newline, continue prompt displayed
-    ;; before last prompt "sqlite> "
-    (esqlite-looking-at-prompt)))
+    (looking-at regexp)))
 
-(defconst esqlite-prompt-regexp
-  (concat "^"
-          "\\( *"
-          (regexp-quote esqlite-continue-prompt)
-          "\\)*"
-          (regexp-quote esqlite-prompt)
-          "\\'"))
+(defun esqlite--prompt-p ()
+  ;; when executed sql contains newline, continue prompt displayed
+  ;; before last prompt "sqlite> "
+  (esqlite--prompt-eob esqlite--prompt-re-next))
 
 (defvar esqlite--default-init-file nil)
 
@@ -268,8 +344,8 @@ Please download and install fakecygpty (Google it!!)"
             (let ((file (make-temp-file "emacs-esqlite-")))
               (with-temp-buffer
                 (insert (format ".prompt \"%s\" \"%s\"\n"
-                                esqlite-prompt
-                                esqlite-continue-prompt))
+                                esqlite--prompt
+                                esqlite--prompt-continue))
                 (write-region (point-min) (point-max) file nil 'no-msg))
               file))))
 
@@ -278,13 +354,7 @@ Please download and install fakecygpty (Google it!!)"
          ;; non pty resulting in echoing query.
          (process-connection-type t)
          (default-process-coding-system
-           (cond
-            ((consp esqlite-process-coding-system)
-             esqlite-process-coding-system)
-            ((coding-system-p esqlite-process-coding-system)
-             (cons esqlite-process-coding-system
-                   esqlite-process-coding-system))
-            (t nil))))
+           (esqlite--process-coding-system)))
      ;; currently no meanings of this
      ;; in the future release may support i18n.
      (setenv "LANG" "C")
@@ -292,7 +362,7 @@ Please download and install fakecygpty (Google it!!)"
 
 (defmacro esqlite--with-process (proc &rest form)
   (declare (indent 1) (debug t))
-  `(let ((buf (process-buffer proc)))
+  `(let ((buf (process-buffer ,proc)))
      (when (buffer-live-p buf)
        (with-current-buffer buf
          ,@form))))
@@ -306,16 +376,9 @@ This form check syntax error report from esqlite command."
        (goto-char (point-max))
        (insert event)
        (goto-char (point-min))
-       (unless (process-get proc 'esqlite-syntax-error)
-         ;; check only first time filter received data.
-
-         ;;FIXME this error output to stderr. Separate stderr to other file??
-         ;;     Altough rarely happens, worrying about confusing stdout/stderr
-         (let ((errmsg (esqlite--read-syntax-error-at-point)))
-           (process-put proc 'esqlite-syntax-error (or errmsg t))))
        ,@form)))
 
-(defun esqlite-start-process (buffer &rest args)
+(defun esqlite--start-process (buffer &rest args)
   (esqlite--with-env
    (let ((cmdline (cons esqlite-sqlite-program args))
          (cygwinp (esqlite-mswin-cygwin-p)))
@@ -328,12 +391,12 @@ This form check syntax error report from esqlite command."
              (cons esqlite-mswin-fakecygpty-program cmdline)))
      (apply 'start-process "Esqlite" buffer cmdline))))
 
-(defun esqlite-call-process-region (buffer start end &rest args)
+(defun esqlite--call-process-region (buffer start end &rest args)
   (esqlite--with-env
    (apply 'call-process-region
           start end esqlite-sqlite-program nil buffer nil args)))
 
-(defun esqlite-expand-db-name (file)
+(defun esqlite--expand-db-name (file)
   (if (esqlite-mswin-cygwin-p)
       ;; esqlite on cygwin cannot accept c:/hoge like path.
       ;; must convert /cygdrive/c/hoge
@@ -344,40 +407,49 @@ This form check syntax error report from esqlite command."
 (defun esqlite--create-process-buffer ()
   (generate-new-buffer " *esqlite work* "))
 
-(defun esqlite-start-csv-process (file &optional query nullvalue &rest args)
-  "Start async esqlite process.
+(defun esqlite-start-csv-process (file-or-key &optional query nullvalue &rest args)
+  "[Low level API] Start async esqlite process.
+If QUERY is specified, exit immediately after execute the QUERY.
 
-Cygwin: FILE contains multibyte char, may fail to open FILE as database."
+Cygwin: FILE name contains multibyte char, may fail to open FILE as database."
   (let* ((init (esqlite--default-init-file))
-         (db (esqlite-expand-db-name file))
-         (filename (expand-file-name file))
+         (file (and (stringp file-or-key) file-or-key))
+         (key (and (symbolp file-or-key) file-or-key))
+         (db (and file (list (esqlite--expand-db-name file))))
+         (filename (and file (expand-file-name file)))
          (null (or nullvalue (esqlite--temp-null query)))
+         (query (and query (esqlite--terminate-statement query)))
          (args `(
-                 ,@(if query `("-batch") '("-interactive"))
+                 "-interactive"
                  "-init" ,init
                  "-csv"
                  "-nullvalue" ,null
                  ;; prior than preceeding args
                  ,@args
-                 ,db))
+                 ,@db))
          (buf (esqlite--create-process-buffer))
-         (proc (apply 'esqlite-start-process buf args)))
+         (proc (apply 'esqlite--start-process buf args)))
     (process-put proc 'esqlite-init-file init)
     (process-put proc 'esqlite-filename filename)
     (process-put proc 'esqlite-null-value null)
+    (process-put proc 'esqlite-memory-key key)
     (when query
+      ;; to clear initializing message and first prompt
+      (esqlite--with-process proc
+        (esqlite--until-prompt proc)
+        (erase-buffer))
       (process-send-string proc query)
       ;; imitate calling command
       ;; e.g. esqlite db.esqlite "select some,of,query from table"
-      (process-send-string proc ";\n.exit\n"))
+      (process-send-string proc ".exit\n"))
     proc))
 
 (defun esqlite-call-csv-process (file query &optional nullvalue &rest args)
-  "Call esqlite process.
+  "[Low level API] Call esqlite process.
 
 Cygwin: FILE contains multibyte char, may fail to open FILE as database."
   (let* ((init (esqlite--default-init-file))
-         (db (esqlite-expand-db-name file))
+         (db (esqlite--expand-db-name file))
          (null (or nullvalue (esqlite--temp-null query)))
          (args `(
                  "-batch"
@@ -393,32 +465,124 @@ Cygwin: FILE contains multibyte char, may fail to open FILE as database."
     ;; decrease the risk of this.
     ;; For example, database file have a multibyte name.
     (apply
-     'esqlite-call-process-region
+     'esqlite--call-process-region
      (current-buffer)
      ;; `call-process-region' start argument accept string
-     (concat query ";\n") nil
+     (esqlite--terminate-statement query) nil
      args)))
 
-(defun esqlite-looking-at-prompt ()
-  (looking-at esqlite-prompt-regexp))
+;;
+;; Sqlite text -> Emacs data
+;;
 
+;; http://www.sqlite.org/syntaxdiagrams.html#numeric-literal
+(defconst esqlite-numeric-literal-regexp
+  (eval-when-compile
+    (concat
+     "\\`"
+     "[+-]?"
+     "\\([0-9]+\\(\\.\\([0-9]*\\)\\)?\\|\\.[0-9]+\\)"
+     "\\(E[+-]?[0-9]+\\)?"
+     "\\'")))
+
+(defun esqlite-numeric-text-p (text)
+  "Utility function to check TEXT is numeric."
+  (and (string-match esqlite-numeric-literal-regexp text)
+       t))
+
+(defun esqlite-hex-to-bytes (hex)
+  "To get the hex blob data as a unibyte string.
+
+NOTE: If BLOB data contains non text byte (null-byte), this
+  case `esqlite-*-read' function family may return truncated bytes.
+  This case you should use HEX Sqlite function in SQL and decode it
+  with this function.
+This function is not checking hex is valid."
+  (apply 'unibyte-string
+         (loop for start from 0 below (length hex) by 2
+               for end from (if (oddp (length hex)) 1 2) by 2
+               collect (string-to-number (substring hex start end) 16))))
+
+;;
+;; sleep in process filter
+;;
+
+(defvar esqlite-sleep-second
+  ;;FIXME
+  ;; This check calculate response of external command which does not accept
+  ;; from process output.
+  (apply 'min (loop for _ in '(1 2 3 4 5)
+                    collect
+                    (let ((start (float-time)))
+                      ;; probablly every system have "echo" ...
+                      (call-process "echo" nil nil nil "1")
+                      (let ((end (float-time)))
+                        (- end start))))))
+
+(defun esqlite-sleep (_dummy)
+  ;; Other code affect to buffer while `sleep-for'.
+  ;; TODO why need save-excursion? timer? filter? I can't get clue.
+  (save-excursion
+    ;; Achieve like a asynchronous behavior (ex: draw mode line)
+    (redisplay)
+    (sleep-for esqlite-sleep-second)))
+
+;;
+;; handling sqlite prompt
+;;
+
+(defun esqlite--try-to-delete-halfway-prompt ()
+  (when (and
+         (or (looking-at esqlite--prompt-re-any-continue)
+             (looking-at esqlite--prompt-re-next)
+             (looking-at esqlite--prompt-re-any-proceeding))
+         (match-beginning 1))
+    (replace-match "" nil nil nil 1)))
+
+(defun esqlite--try-to-delete-continue ()
+  (let ((i 0))
+    (catch 'done
+      (while t
+        (cond
+         ((looking-at (concat (regexp-quote esqlite--prompt) "\\'"))
+          (throw 'done t))
+         ((looking-at (concat (regexp-quote esqlite--prompt)))
+          (replace-match "" nil nil nil 0)
+          (setq i (1+ i)))
+         ((looking-at (concat (regexp-quote esqlite--prompt-continue)))
+          (replace-match "" nil nil nil 0)
+          (setq i (1+ i)))
+         (t
+          (throw 'done t)))))
+    i))
+
+;; read "Error:" sqlite message from current buffer
+;; may delete some prompts if any.
 (defun esqlite--read-syntax-error-at-point ()
-  (and (looking-at "^Error: \\(.*\\)")
-       (format "esqlite: %s" (match-string 1))))
+  (let* ((prompt-count (esqlite--try-to-delete-continue))
+         (errmsg (esqlite--read-syntax-error)))
+    (list prompt-count errmsg)))
 
-(defun esqlite--maybe-raise-syntax-error (proc)
-  (while (and (eq (process-status proc) 'run)
-              (not (esqlite-prompt-p))
-              (null (process-get proc 'esqlite-syntax-error)))
-    (esqlite-sleep proc))
-  (when (stringp (process-get proc 'esqlite-syntax-error))
-    (error "%s" (process-get proc 'esqlite-syntax-error))))
+(defun esqlite--read-syntax-error ()
+  (and (looking-at "^Error: \\(.*\\)")
+       (match-string 1)))
+
+(defun esqlite--until-prompt (proc)
+  (while (and (not (process-get proc 'esqlite-stream-continue-prompt))
+              (eq (process-status proc) 'run)
+              (not (esqlite--prompt-p)))
+    (esqlite-sleep proc)))
 
 ;;
 ;; read csv from esqlite
 ;;
 
 (defun esqlite--read-csv-line (&optional null)
+  ;;FIXME:
+  (esqlite--try-to-delete-halfway-prompt)
+  (let ((errmsg (esqlite--read-syntax-error)))
+    (when errmsg
+      (esqlite--error "%s" errmsg)))
   (let ((first (point))
         (line (pcsv-read-line)))
     ;; end of line is not a newline.
@@ -427,11 +591,18 @@ Cygwin: FILE contains multibyte char, may fail to open FILE as database."
       (goto-char first)
       (signal 'invalid-read-syntax nil))
     (loop for datum in line
-          collect (if (equal datum null)
-                      :null
-                    datum))))
+          collect
+          ;; handling `esqlite--temp-null'
+          (if (equal datum null)
+              :null
+            datum))))
 
 (defun esqlite--read-csv-line-with-deletion (null)
+  (when (memq system-type '(windows-nt))
+    ;; wash unquoted carriage return
+    (save-excursion
+      (while (re-search-forward "\r$" nil t)
+        (replace-match ""))))
   (let ((start (point))
         (row (esqlite--read-csv-line null)))
     (delete-region start (point))
@@ -452,28 +623,99 @@ Delete csv data if reading was succeeded."
     (nreverse res)))
 
 ;;
-;; esqlite data (csv) <-> emacs data
+;; Escape text (Emacs data -> Sqlite text)
 ;;
 
+(defun esqlite-escape--like-table (escape-char &optional override)
+  (let ((escape (or escape-char ?\\)))
+    (append
+     override
+     `((?\% . ,(format "%c%%" escape))
+       (?\_ . ,(format "%c_"  escape))
+       (,escape . ,(format "%c%c"  escape escape))))))
+
+;;;###autoload
+(defun esqlite-escape-string (string &optional quote-char)
+  "Escape STRING as a esqlite string object context.
+Optional QUOTE-CHAR arg indicate quote-char
+
+e.g.
+\(let ((user-input \"a\\\"'b\"))
+  (format \"SELECT * FROM T WHERE a = '%s'\" \
+\(esqlite-escape-string user-input ?\\')))
+  => \"SELECT * FROM T WHERE a = 'a\\\"''b'\"
+
+\(let ((user-input \"a\\\"'b\"))
+  (format \"SELECT * FROM T WHERE a = \\\"%s\\\"\" \
+\(esqlite-escape-string user-input ?\\\")))
+  => \"SELECT * FROM T WHERE a = \\\"a\\\"\\\"'b\\\"\"
+"
+  (setq quote-char (or quote-char ?\'))
+  (esqlite-parse-replace
+   string
+   `((,quote-char . ,(format "%c%c" quote-char quote-char)))))
+
+;;;###autoload
+(defun esqlite-escape-like (query &optional escape-char)
+  "Escape QUERY as a sql LIKE context.
+This function is not quote single-quote (') you should use with
+`esqlite-escape-string' or `esqlite-format-text'.
+
+ESCAPE-CHAR is optional char (default '\\') for escape sequence expressed
+following esqlite syntax.
+
+e.g. fuzzy search of \"100%\" text in `value' column in `hoge' table.
+   SELECT * FROM hoge WHERE value LIKE '%100\\%%' ESCAPE '\\'
+
+To create the like pattern:
+   => (concat \"%\" (esqlite-escape-like \"100%\" ?\\\\) \"%\")
+   => \"%100\\%%\""
+  (unless (or (null escape-char)
+              (and (<= 0 escape-char)
+                   (<= escape-char 127)))
+    (esqlite--error "escape-char must be a ascii"))
+  (esqlite-parse-replace
+   query
+   (esqlite-escape--like-table escape-char)))
+
+;;;###autoload
+(defun esqlite-format-text (string &optional quote-char)
+  "Convenience function to provide make quoted STRING in sql."
+  (setq quote-char (or quote-char ?\'))
+  (format "%c%s%c"
+          quote-char
+          (esqlite-escape-string string quote-char)
+          quote-char))
+
 (defun esqlite-format-object (object)
-  (concat "\""
-          (replace-regexp-in-string "\"" "\"\"" object)
-          "\""))
+  (esqlite-format-text object ?\"))
 
 (defun esqlite-format-value (object)
   (cond
    ((stringp object)
-    (concat
-     "'"
-     (replace-regexp-in-string "'" "''" object)
-     "'"))
+    (if (or (multibyte-string-p object)
+            ;; only ascii (printable chars) or empty string
+            ;; some of exception, control chars must be escape.
+            (string-match "\\`[\t\n\r\x20-\x7e]*\\'" object))
+        (concat
+         "'"
+         (replace-regexp-in-string "'" "''" object)
+         "'")
+      (esqlite-format-blob object)))
    ((numberp object)
     (prin1-to-string object))
    ((eq object :null) "null")
    ((listp object)
     (mapconcat 'esqlite-format-value object ", "))
    (t
-    (error "esqlite: Not a supported type %s" object))))
+    (esqlite--error "Not a supported type"))))
+
+(defun esqlite-format-blob (unibyte)
+  (when (or (not (stringp unibyte))
+            (multibyte-string-p unibyte))
+    (esqlite--error "Not a unibyte string"))
+  (format "x'%s'" (mapconcat (lambda (x) (format "%02x" x))
+                             unibyte "")))
 
 (eval-and-compile
   (defvar esqlite-format--table
@@ -485,11 +727,11 @@ Delete csv data if reading was succeeded."
                   ((numberp x) (number-to-string x))
                   (t (prin1-to-string x)))))
         ("t" . esqlite-escape-string)
-        ("T" . esqlite-text)
+        ("T" . esqlite-format-text)
         ("l" . esqlite-escape-like)
         ("L" . (lambda (x)
                  (concat
-                  (esqlite-text (esqlite-escape-like x))
+                  (esqlite-format-text (esqlite-escape-like x))
                   " ESCAPE '\\' ")))
         ;; some database object
         ("o" . esqlite-format-object)
@@ -499,13 +741,15 @@ Delete csv data if reading was succeeded."
                             l ", ")))
         ;; some value list (string, number, list) with properly quoted
         ("V" . esqlite-format-value)
+        ;; format byte string to x'ffee0011' like literal
+        ("X" . esqlite-format-blob)
         ))))
 
 ;;;###autoload
 (defun esqlite-format (esqlite-fmt &rest esqlite-objects)
-  "Prepare sql with ESQLITE-FMT like `format'.
+  "Prepare sql with FMT like `format'.
 
-ESQLITE-FMT is a string or list of string.
+FMT is a string or list of string.
  each list item join with newline.
 
 Each directive accept arg which contains variable name.
@@ -548,7 +792,7 @@ e.g.
                  (fn (assoc-default spec esqlite-format--table))
                  obj)
             (when (and varname (string-match "\\`esqlite-" varname))
-              (error "esqlite: Unable use esqlite- prefix variable %s"
+              (esqlite--error "Unable to use esqlite- prefix variable %s"
                      varname))
             ;; Delete formatter directive
             (delete-region (1- (point)) (match-end 0))
@@ -560,121 +804,171 @@ e.g.
               (setq obj (car esqlite-objects))
               (setq esqlite-objects (cdr esqlite-objects)))
              (t
-              (error "esqlite: No value assigned to `%%%s'" spec)))
+              (esqlite--error "No value assigned to `%%%s'" spec)))
             (unless fn
-              (error "esqlite: Invalid format character: `%%%s'" spec))
+              (esqlite--error "Invalid format character: `%%%s'" spec))
             (unless (functionp fn)
-              (error "esqlite: Assert"))
+              (esqlite--error "Assert"))
             (let ((val obj)
                   text)
               (setq text (funcall fn val))
               (insert text)))))))
     (when esqlite-objects
-      (error "esqlite: args out of range %s" esqlite-objects))
+      (esqlite--error "args out of range %s" esqlite-objects))
     (buffer-string)))
-
-;; http://www.sqlite.org/syntaxdiagrams.html#numeric-literal
-(defconst esqlite-numeric-literal-regexp
-  (eval-when-compile
-    (concat
-     "\\`"
-     "[+-]?"
-     "\\([0-9]+\\(\\.\\([0-9]*\\)\\)?\\|\\.[0-9]+\\)"
-     "\\(E[+-]?[0-9]+\\)?"
-     "\\'")))
-
-(defun esqlite-numeric-text-p (text)
-  "Utility function to check TEXT is numeric"
-  (and (string-match esqlite-numeric-literal-regexp text)
-       t))
-
-;;
-;; sleep in process filter
-;;
-
-(defvar esqlite-sleep-second
-  ;;FIXME
-  ;; This check calculate response of external command which does not accept
-  ;; from process output.
-  (apply 'min (loop for _ in '(1 2 3 4 5)
-                    collect
-                    (let ((start (float-time)))
-                      (call-process "echo" nil nil nil "1")
-                      (let ((end (float-time)))
-                        (- end start))))))
-
-(defun esqlite-sleep (_dummy)
-  ;; Other code affect to buffer while `sleep-for'.
-  ;; TODO why need save-excursion? timer? filter? I can't get clue.
-  (save-excursion
-    ;; Achieve like a asynchronous behavior (ex: draw mode line)
-    (redisplay)
-    (sleep-for esqlite-sleep-second)))
-
-;;
-;; Escape text
-;;
-
-(defun esqlite-escape--like-table (escape-char &optional override)
-  (let ((escape (or escape-char ?\\)))
-    (append
-     override
-     `((?\% . ,(format "%c%%" escape))
-       (?\_ . ,(format "%c_"  escape))
-       (,escape . ,(format "%c%c"  escape escape))))))
-
-;;;###autoload
-(defun esqlite-text (string &optional quote-char)
-  "Convenience function to provide make quoted STRING in sql."
-  (setq quote-char (or quote-char ?\'))
-  (format "%c%s%c"
-          quote-char
-          (esqlite-escape-string string quote-char)
-          quote-char))
-
-;;;###autoload
-(defun esqlite-escape-string (string &optional quote-char)
-  "Escape STRING as a esqlite string object context.
-Optional QUOTE-CHAR arg indicate quote-char
-
-e.g.
-\(let ((user-input \"a\\\"'b\"))
-  (format \"SELECT * FROM T WHERE a = '%s'\" \
-\(esqlite-escape-string user-input ?\\')))
-  => \"SELECT * FROM T WHERE a = 'a\\\"''b'\"
-
-\(let ((user-input \"a\\\"'b\"))
-  (format \"SELECT * FROM T WHERE a = \\\"%s\\\"\" \
-\(esqlite-escape-string user-input ?\\\")))
-  => \"SELECT * FROM T WHERE a = \\\"a\\\"\\\"'b\\\"\"
-"
-  (setq quote-char (or quote-char ?\'))
-  (esqlite--replace
-   string
-   `((,quote-char . ,(format "%c%c" quote-char quote-char)))))
-
-;;;###autoload
-(defun esqlite-escape-like (query &optional escape-char)
-  "Escape QUERY as a sql LIKE context.
-This function is not quote single-quote (') you should use with
-`esqlite-escape-string' or `esqlite-text'.
-
-ESCAPE-CHAR is optional char (default '\\') for escape sequence expressed
-following esqlite syntax.
-
-e.g. fuzzy search of \"100%\" text in `value' column in `hoge' table.
-   SELECT * FROM hoge WHERE value LIKE '%100\\%%' ESCAPE '\\'
-
-To create the like pattern:
-   => (concat \"%\" (esqlite-escape-like \"100%\" ?\\\\) \"%\")
-   => \"%100\\%%\""
-  (esqlite--replace
-   query
-   (esqlite-escape--like-table escape-char)))
 
 ;;;
 ;;; Esqlite stream
 ;;;
+
+;;
+;; private
+;;
+
+(defmacro esqlite-stream--with-buffer (stream &rest form)
+  (declare (indent 1) (debug t))
+  `(let ((buf (process-buffer stream)))
+     (unless (buffer-live-p buf)
+       (esqlite--error "Stream buffer has been deleted"))
+     (with-current-buffer buf
+       ,@form)))
+
+(defun esqlite-stream--reuse-memory (key)
+  (loop for p in (process-list)
+        if (and (esqlite-stream-alive-p p)
+                (eq (esqlite-stream-memory-key p) key))
+        return p))
+
+(defun esqlite-stream--reuse-file (file)
+  (loop with filename = (expand-file-name file)
+        for p in (process-list)
+        if (and (esqlite-stream-alive-p p)
+                (string= (esqlite-stream-filename p) filename))
+        return p))
+
+(defun esqlite-stream--open (file-or-key)
+  (let* ((stream (esqlite-start-csv-process file-or-key)))
+    (process-put stream 'esqlite-stream-process-p t)
+    ;; Do not show confirm prompt when exiting.
+    ;; `esqlite-killing-emacs' close all stream.
+    (set-process-query-on-exit-flag stream nil)
+    (set-process-filter stream 'esqlite-stream--filter)
+    (set-process-sentinel stream 'esqlite-stream--sentinel)
+    (esqlite-stream--wait stream)
+    stream))
+
+(defun esqlite-stream--maybe-error (proc query)
+  (let ((done-count 0)
+        ;; Every newline get a prompt/continue.
+        ;; But ignore last line. Last line have next new prompt.
+        (expected-cont (- (length (split-string query "\n")) 2)))
+    (while (and (eq (process-status proc) 'run)
+                (not (esqlite--prompt-p))
+                (or (= done-count 0)
+                    (< done-count expected-cont)))
+      (esqlite-sleep proc)
+      (destructuring-bind (prompt-count errmsg)
+          (esqlite--read-syntax-error-at-point)
+        (setq done-count (+ done-count prompt-count))
+        (when (stringp errmsg)
+          (esqlite--error "%s" errmsg))
+        (when (> done-count expected-cont)
+          (process-put proc 'esqlite-stream-continue-prompt t)
+          (esqlite--fatal 'esqlite-unterminate-query
+                          "Unterminated query"))
+        (process-put proc 'esqlite-stream-continue-prompt nil)))))
+
+(defun esqlite-stream--filter (proc event)
+  (esqlite--with-parse proc event
+    (let ((filter (process-get proc 'esqlite-stream-filter)))
+      (when (functionp filter)
+        (funcall filter proc)))))
+
+(defun esqlite-stream--sentinel (proc event)
+  (esqlite--with-process proc
+    (when (memq (process-status proc) '(exit signal))
+      (kill-buffer (current-buffer)))))
+
+(defun esqlite-stream--send-string (stream string)
+  (esqlite-stream--with-buffer stream
+    ;; wait until previous sql was finished.
+    (esqlite--until-prompt stream)
+    ;; clear all text contains prompt.
+    (erase-buffer)
+    (process-send-string stream string)
+    ;; only check syntax error.
+    ;; This check maybe promptly return from esqlite process.
+    (esqlite-stream--maybe-error stream string)
+    ;; sync
+    (esqlite--until-prompt stream)
+    t))
+
+(defun esqlite-stream--async-send-string (stream string)
+  (esqlite-stream--with-buffer stream
+    ;; wait until previous sql was finished.
+    (esqlite--until-prompt stream)
+    ;; clear all text contains prompt.
+    (erase-buffer)
+    (process-send-string stream string)
+    ;; only check syntax error.
+    ;; This check maybe promptly return from esqlite process.
+    (esqlite-stream--maybe-error stream string)))
+
+(defun esqlite-stream--send-command-0 (stream command &optional async)
+  "Send a meta command to esqlite STREAM.
+This function return after checking syntax error of COMMAND.
+
+COMMAND is a command line that may ommit newline."
+  (let ((query (esqlite--terminate-command command))
+        (sender (if async
+                    'esqlite-stream--async-send-string
+                  'esqlite-stream--send-string)))
+    (funcall sender stream query)
+    (unless async
+      (esqlite-stream--with-buffer stream
+        (buffer-substring (point-min) (point-at-eol 0))))))
+
+(defun esqlite-stream--send-sql-0 (stream sql &optional async)
+  "Send SQL to esqlite STREAM.
+This function return after checking syntax error of SQL.
+
+SQL is a sql statement that may ommit statement end `;'.
+ Do Not send multiple statements (compound statements) or
+ comment statement. This may cause STREAM stalling.
+
+Examples:
+Good: SELECT * FROM table1;
+Good: SELECT * FROM table1
+Good: SELECT * FROM table1\n
+ Bad: SELECT * FROM table1; SELECT * FROM table2;
+Very Bad: SELECT 'Non terminated quote
+"
+  (let ((query (esqlite--terminate-statement sql))
+        (sender (if async
+                    'esqlite-stream--async-send-string
+                  'esqlite-stream--send-string)))
+    (funcall sender stream query)))
+
+;; wait until prompt to buffer
+(defun esqlite-stream--wait (stream)
+  (let ((inhibit-redisplay t))
+    (esqlite-stream--with-buffer stream
+      (esqlite--until-prompt stream))))
+
+;;
+;; public
+;;
+
+(defun esqlite-stream-status (stream)
+  (cond
+   ((not (esqlite-stream-alive-p stream))
+    'exit)
+   ((esqlite-stream-prompt-p stream)
+    'prompt)
+   ((process-get stream 'esqlite-stream-continue-prompt)
+    'continue)
+   (t
+    'querying)))
 
 (defun esqlite-stream-p (obj)
   (and (processp obj)
@@ -689,155 +983,113 @@ To create the like pattern:
 (defun esqlite-stream-filename (stream)
   (process-get stream 'esqlite-filename))
 
-(defun esqlite-stream--reuse (file)
-  (loop with filename = (expand-file-name file)
-        for p in (process-list)
-        if (and (esqlite-stream-alive-p p)
-                (string= (esqlite-stream-filename p) filename))
-        return p))
+(defun esqlite-stream-memory-key (stream)
+  (process-get stream 'esqlite-memory-key))
 
-(defun esqlite-stream--open (file)
-  (let* ((stream (esqlite-start-csv-process file)))
-    (process-put stream 'esqlite-stream-process-p t)
-    ;; Do not show confirm prompt when exiting.
-    ;; `esqlite-killing-emacs' close all stream.
-    (set-process-query-on-exit-flag stream nil)
-    (set-process-filter stream 'esqlite-stream--filter)
-    (set-process-sentinel stream 'esqlite-stream--sentinel)
-    (let ((inhibit-redisplay t))
-      (esqlite-stream--wait stream))
-    stream))
+(defun esqlite-stream-check-alive (stream)
+  (unless (esqlite-stream-alive-p stream)
+    (esqlite--error "Stream has been closed")))
 
 ;;;###autoload
-(defun esqlite-stream-open (file &optional force-open)
-  "Open FILE stream as esqlite database if not open.
-Optional FORCE-OPEN indicate do not reuse opened stream.
+(defun esqlite-stream-open (file &optional reuse)
+  "Open FILE stream as sqlite database.
+Optional REUSE indicate get having been opened stream.
 
 This function return process as stream object, but
  do not use this as a process object. This object style
  may be changed in future release."
+  (check-type file string)
   (esqlite-check-sqlite-program)
-  (or (and (not force-open) (esqlite-stream--reuse file))
+  (or (and reuse
+           (esqlite-stream--reuse-file file))
       (esqlite-stream--open file)))
 
-(defun esqlite-stream-close (stream)
-  (unless (process-get stream 'esqlite-stream-process-p)
-    (error "esqlite: Not a esqlite process"))
-  (when (eq (process-status stream) 'run)
-    (with-timeout (5 (kill-process stream))
-      ;; DO NOT use `esqlite-stream-send-command'
-      ;; No need to wait prompt.
-      (process-send-string stream ".quit\n")
-      (let ((inhibit-redisplay t))
-        (while (eq (process-status stream) 'run)
-          (esqlite-sleep stream)))))
-  ;; delete process forcibly
-  (delete-process stream))
+;;;###autoload
+(defun esqlite-stream-memory (&optional key)
+  "Open volatile sqlite database in memory.
+KEY should be a non-nil symbol which identify the stream.
+If KEY stream has already been opend, that stream is reused.
 
-(defun esqlite-stream-set-coding-system (stream decoding encoding)
-  (set-process-coding-system stream decoding encoding))
+To save the stream to file, you can use `backup' command.
+e.g.
+\(esqlite-stream-send-command stream \"backup\" \"filename.sqlite\")
 
-(defun esqlite-stream--filter (proc event)
-  (esqlite--with-parse proc event
-    (let ((filter (process-get proc 'esqlite-filter)))
-      (when (functionp filter)
-        (funcall filter proc)))))
-
-(defun esqlite-stream--sentinel (proc event)
-  (esqlite--with-process proc
-    (when (memq (process-status proc) '(exit signal))
-      (kill-buffer (current-buffer)))))
-
-(defun esqlite-stream--csv-filter (proc)
-  (let* ((null (process-get proc 'esqlite-null-value))
-         (data (esqlite--read-csv-with-deletion null))
-         (accum (process-get proc 'esqlite-accumulation)))
-    (process-put proc 'esqlite-accumulation
-                 (append accum data))))
-
-(defun esqlite-stream-send (stream query)
-  "High level api to send QUERY to STREAM by user manually.
-If QUERY is a meta-command, return string of output from STREAM.
-If QUERY is a sql statement, return just `t'"
+See other information at `esqlite-stream-open'."
+  (and key (check-type key symbol))
+  (esqlite-check-sqlite-program)
   (cond
-   ((string-match "^[ \t\n]*\\." query)
-    (esqlite-stream-send-command-0 stream query))
-   (t
-    (esqlite-stream-send-sql stream query))))
+   ((null key)
+    (esqlite-stream--open (make-symbol "unique")))
+   ((esqlite-stream--reuse-memory key))
+   (t (esqlite-stream--open key))))
+
+(defun esqlite-stream-close (stream &optional timeout)
+  (let ((proc stream))
+    (when (eq (process-status proc) 'run)
+      (with-timeout ((or timeout 5) (kill-process proc))
+        ;; DO NOT use `esqlite-stream-send-command'
+        ;; No need to wait prompt.
+        (process-send-string proc ".quit\n")
+        (let ((inhibit-redisplay t))
+          (while (eq (process-status proc) 'run)
+            (esqlite-sleep proc)))))
+    ;;FIXME:
+    ;; sometime process sentinel is not invoked.
+    (kill-buffer (process-buffer proc))
+    ;; delete process forcibly
+    (delete-process proc)))
 
 (defun esqlite-stream-send-command (stream command &rest args)
   "Send COMMAND and ARGS to STREAM without checking COMMAND error.
 You can call this function as a API. Not need to publish user.
- Use `esqlite-stream-send' as a high level API."
-  (let ((line (format "%s %s\n" command (mapconcat 'esqlite-text args " "))))
-    (esqlite-stream-send-command-0 stream line)))
+ Use `esqlite-stream-execute' as a high level API."
+  (esqlite-stream-check-alive stream)
+  (unless (string-match "\\`\\." command)
+    (setq command (concat "." command)))
+  (let ((line (format "%s %s" command (mapconcat 'esqlite-format-text args " "))))
+    (esqlite-stream--send-command-0 stream line)))
 
-(defun esqlite-stream-send-command-0 (stream query)
-  "Send a meta command to esqlite STREAM.
-This function return after checking syntax error of QUERY.
+(defun esqlite-stream-execute (stream query)
+  "High level api to send QUERY to STREAM.
+If QUERY is a meta-command just send the command to STREAM.
+If QUERY is a sql statement, wait until prompt return just `t'."
+  (esqlite-stream-check-alive stream)
+  (cond
+   ((string-match "\\`[ \t\n]*\\." query)
+    (esqlite-stream--send-command-0 stream query))
+   (t
+    (esqlite-stream--send-sql-0 stream query))))
 
-QUERY is a command line that may ommit newline."
-  (let ((buf (process-buffer stream)))
-    (with-current-buffer buf
-      (esqlite-stream--until-prompt stream)
-      ;; clear all text contains prompt.
-      (erase-buffer)
-      (process-put stream 'esqlite-syntax-error nil)
-      (process-send-string stream (esqlite-terminate-command query))
-      ;; only check syntax error.
-      ;; This check maybe promptly return from esqlite process.
-      (esqlite--maybe-raise-syntax-error stream)
-      (goto-char (point-max))
-      (buffer-substring (point-min) (point-at-eol 0)))))
-
-(defun esqlite-stream-send-sql (stream sql)
-  "Send SQL to esqlite STREAM.
-This function return after checking syntax error of SQL.
-
-SQL is a sql statement that may ommit statement end `;'.
- Do Not send multiple statements or comment statement.
- This may cause STREAM stalling with no error report.
-
-Examples:
-Good: SELECT * FROM table1;
-Good: SELECT * FROM table1
-Good: SELECT * FROM table1\n
- Bad: SELECT * FROM table1; SELECT * FROM table2;"
-  ;; wait until previous sql was finished.
-  (let ((buf (process-buffer stream)))
-    (with-current-buffer buf
-      (esqlite-stream--until-prompt stream)
-      ;; clear all text contains prompt.
-      (erase-buffer)
-      (process-put stream 'esqlite-syntax-error nil)
-      (process-send-string stream (esqlite-terminate-statement sql))
-      ;; only check syntax error.
-      ;; This check maybe promptly return from esqlite process.
-      (esqlite--maybe-raise-syntax-error stream)
-      t)))
-
-(defalias 'esqlite-stream-execute 'esqlite-stream-send-sql)
+(defun esqlite-stream-async-execute (stream query)
+  "Execute QUERY in STREAM."
+  (esqlite-stream-check-alive stream)
+  (cond
+   ((string-match "\\`[ \t\n]*\\." query)
+    (esqlite-stream--send-command-0 stream query t))
+   (t
+    (esqlite-stream--send-sql-0 stream query t))))
 
 (defun esqlite-stream-read (stream query)
-  (unless (esqlite-stream-alive-p stream)
-    (error "esqlite: Stream has been closed"))
-  ;; handling NULL text
-  ;; Use different null text each time when executing query.
-  (let ((nullvalue (esqlite--temp-null query)))
-    (esqlite-stream-send-command stream ".nullvalue" nullvalue)
-    (process-put stream 'esqlite-null-value nullvalue))
-  ;; send synchrounous variables.
-  (process-put stream 'esqlite-filter 'esqlite-stream--csv-filter)
-  (unwind-protect
-      (progn
-        ;; reset accumulate variable
-        (process-put stream 'esqlite-accumulation nil)
-        (esqlite-stream-send-sql stream query)
-        ;; wait until prompt is displayed.
-        ;; filter function handling csv data.
-        (esqlite-stream--wait stream))
-    (process-put stream 'esqlite-filter nil))
-  (process-get stream 'esqlite-accumulation))
+  "Read QUERY result from STREAM.
+
+WARNINGS: See `esqlite-hex-to-bytes'."
+  (esqlite-stream-check-alive stream)
+  ;; Everytime change the NULL text to handle NULL.
+  ;; Use different null text every time when executing query.
+  (let (nullvalue)
+    (cond
+     ((process-get stream 'esqlite-stream-continue-prompt)
+      (setq nullvalue (process-get stream 'esqlite-null-value)))
+     (t
+      (setq nullvalue (esqlite--temp-null query))
+      (process-put stream 'esqlite-null-value nullvalue)
+      (esqlite-stream--send-command-0
+       stream (format ".nullvalue %s" nullvalue))))
+    (esqlite-stream--send-sql-0 stream query)
+    ;; wait until prompt is displayed.
+    ;; filter function handling csv data.
+    (esqlite-stream--with-buffer stream
+      (esqlite--read-csv-with-deletion nullvalue))))
 
 (defun esqlite-stream-read-top (stream query)
   "Convenience function with wrapping `esqlite-stream-read' to get a first row
@@ -851,58 +1103,46 @@ No performance advantage. You need to choose LIMIT statement by your own."
 to get a first item of the results."
   (car-safe (esqlite-stream-read-top stream query)))
 
-;; wait until prompt to buffer
-(defun esqlite-stream--wait (stream)
-  (let ((buf (process-buffer stream)))
-    (with-current-buffer buf
-      (esqlite-stream--until-prompt stream))))
-
-(defun esqlite-stream--until-prompt (stream)
-  (while (and (eq (process-status stream) 'run)
-              (not (esqlite-prompt-p)))
-    (esqlite-sleep stream)))
-
 (defun esqlite-stream-prompt-p (stream)
-  (let ((buf (process-buffer stream)))
-    (when (buffer-live-p buf)
-      (with-current-buffer buf
-        (esqlite-prompt-p)))))
+  (esqlite-stream--with-buffer stream
+    (esqlite--prompt-p)))
 
 (defun esqlite-stream-buffer-string (stream)
-  (let ((buf (process-buffer stream)))
-    (when (buffer-live-p buf)
-      (with-current-buffer buf
-        (buffer-string)))))
+  (esqlite-stream--with-buffer stream
+    (buffer-string)))
+
+(defun esqlite-stream-reset-coding-system (stream)
+  (let ((dec/enc (esqlite--process-coding-system)))
+    (esqlite-stream-set-coding-system
+     stream (car dec/enc) (cdr dec/enc))))
+
+(defun esqlite-stream-set-coding-system (stream &optional decoding encoding)
+  "Set STREAM coding system.
+Both DECODING/ENCODING are ommited, revert to default encoding/decoding."
+  (esqlite-stream-check-alive stream)
+  (let* ((default (process-coding-system stream))
+         (new-dec (or decoding (car default)))
+         (new-enc (or encoding (cdr default)))
+         (multibytep (not (memq 'binary (coding-system-aliases new-dec)))))
+    (esqlite-stream--with-buffer stream
+      (esqlite--until-prompt stream)
+      (set-buffer-multibyte multibytep))
+    (set-process-coding-system stream new-dec new-enc)))
 
 ;;;
 ;;; Esqlite asynchronous read/execute
 ;;;
 
-;;;###autoload
-(defun esqlite-async-read (file query filter &rest args)
-  "Execute QUERY in esqlite FILE and immediately exit the esqlite process.
-FILTER called with one arg that is parsed csv line or `:EOF'.
-  Please use `:EOF' argument finish this async process.
-  This FILTER is invoked in process buffer.
-
-If QUERY contains syntax error, raise the error result before return from
-this function.
-ARGS accept esqlite command arguments. (e.g. -header)"
-  (esqlite-check-sqlite-program)
-  (unless (stringp query)
-    (error "esqlite: No query is provided"))
-  (let* ((proc (apply 'esqlite-start-csv-process file query nil args)))
-    (process-put proc 'esqlite-filter filter)
-    (set-process-filter proc 'esqlite-async-read--filter)
-    (set-process-sentinel proc 'esqlite-async-read--sentinel)
-    (with-current-buffer (process-buffer proc)
-      (esqlite--maybe-raise-syntax-error proc))
-    nil))
-
 (defun esqlite-async-read--filter (proc event)
   (esqlite--with-parse proc event
-    (let ((filter (process-get proc 'esqlite-filter))
+    (let ((filter (process-get proc 'esqlite-async-filter))
           (errmsg (process-get proc 'esqlite-syntax-error)))
+      (unless errmsg
+        (destructuring-bind (prompt-count err)
+            (esqlite--read-syntax-error-at-point)
+          (setq errmsg (or err t))
+          (process-put proc 'esqlite-syntax-error errmsg)
+          (process-put proc 'esqlite-continue-prompt prompt-count)))
       (cond
        ;; ignore if error
        ((stringp errmsg))
@@ -915,17 +1155,52 @@ ARGS accept esqlite command arguments. (e.g. -header)"
 (defun esqlite-async-read--sentinel (proc event)
   (esqlite--with-process proc
     (when (memq (process-status proc) '(exit))
-      (let ((errmsg (process-get proc 'esqlite-syntax-error))
-            (filter (process-get proc 'esqlite-filter)))
+      (let ((filter (process-get proc 'esqlite-async-filter))
+            (errmsg (process-get proc 'esqlite-syntax-error)))
         (cond
          ;; ignore if error
          ((stringp errmsg))
          ((functionp filter)
-          ;; If QUERY contains some error, `esqlite--maybe-raise-syntax-error'
+          ;; If QUERY contains some error, `esqlite-async-read--maybe-error'
           ;; should report error before sentinel.
           (funcall filter :EOF)))))
     (unless (memq (process-status proc) '(run))
       (kill-buffer (current-buffer)))))
+
+(defun esqlite-async-read--maybe-error (proc)
+  (esqlite--with-process proc
+    (while (not (process-get proc 'esqlite-syntax-error))
+      (esqlite-sleep proc)
+      (let ((cont-count (process-get proc 'esqlite-continue-prompt)))
+        (when (and (numberp cont-count)
+                   (> cont-count 0))
+          (esqlite--fatal 'esqlite-unterminate-query
+                          "Unterminated query")))
+      (let ((errmsg (process-get proc 'esqlite-syntax-error)))
+        (when (stringp errmsg)
+          (esqlite--error "%s" errmsg))))))
+
+;;;###autoload
+(defun esqlite-async-read (file query filter &rest args)
+  "Execute QUERY in esqlite FILE and immediately exit the esqlite process.
+FILTER called with one arg that is parsed csv line or `:EOF'.
+  Please use `:EOF' argument finish this async process.
+  This FILTER is invoked in process buffer.
+
+If QUERY contains syntax error, raise the error result before return from
+this function.
+ARGS accept esqlite command arguments. (e.g. -header)
+
+WARNINGS: See `esqlite-hex-to-bytes'."
+  (esqlite-check-sqlite-program)
+  (unless (stringp query)
+    (esqlite--error "No query is provided"))
+  (let* ((proc (apply 'esqlite-start-csv-process file query nil args)))
+    (process-put proc 'esqlite-async-filter filter)
+    (set-process-filter proc 'esqlite-async-read--filter)
+    (set-process-sentinel proc 'esqlite-async-read--sentinel)
+    (esqlite-async-read--maybe-error proc)
+    nil))
 
 ;;;###autoload
 (defun esqlite-async-execute (file query &optional finalize &rest args)
@@ -964,15 +1239,15 @@ FUNC accept just one arg created stream object from `esqlite-stream-open'."
 FUNC accept just one arg created stream object from `esqlite-stream-open'."
   (esqlite-call/stream file
     (lambda (stream)
-      (esqlite-stream-send-sql stream "BEGIN")
+      (esqlite-stream-execute stream "BEGIN")
       (condition-case err
           (prog1
               (funcall func stream)
-            (esqlite-stream-send-sql stream "COMMIT"))
+            (esqlite-stream-execute stream "COMMIT"))
         (error
          ;; stream close automatically same as doing ROLLBACK.
          ;; but explicitly call this.
-         (esqlite-stream-send-sql stream "ROLLBACK")
+         (esqlite-stream-execute stream "ROLLBACK")
          (signal (car err) (cdr err)))))))
 
 (put 'esqlite-call/transaction 'lisp-indent-function 1)
@@ -989,19 +1264,29 @@ This function designed with SELECT QUERY, but works fine another
 
 ARGS accept some of esqlite command arguments but do not use it
  unless you understand what you are doing.
-"
+
+WARNINGS: See `esqlite-hex-to-bytes'."
   (esqlite-check-sqlite-program)
   (with-temp-buffer
     (let* ((nullvalue (esqlite--temp-null query))
            (exit-code (apply 'esqlite-call-csv-process
                              file query nullvalue args)))
       (goto-char (point-min))
+      (destructuring-bind (prompt-count errmsg)
+          (esqlite--read-syntax-error-at-point)
+        (cond
+         ((not (stringp errmsg)))
+         ((string-match "incomplete SQL" errmsg)
+          ;; special handling
+          (esqlite--fatal 'esqlite-unterminate-query
+                          "Unterminated query"))
+         (t
+          (esqlite--error "%s" errmsg))))
+      ;; I couldn't check exit code is non-zero
+      ;; but check it
       (unless (eq exit-code 0)
-        (let ((errmsg (esqlite--read-syntax-error-at-point)))
-          (when errmsg
-            (error "esqlite: %s" errmsg)))
         ;; raise error anyway
-        (error "esqlite: %s" (buffer-string)))
+        (esqlite--error "%s" (buffer-string)))
       (esqlite--read-csv-with-deletion nullvalue))))
 
 ;;;###autoload
