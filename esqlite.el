@@ -5,7 +5,7 @@
 ;; URL: https://github.com/mhayashi1120/Emacs-esqlite/raw/master/esqlite.el
 ;; Emacs: GNU Emacs 24 or later
 ;; Package-Requires: ((pcsv "1.3.3"))
-;; Version: 0.1.0
+;; Version: 0.1.1
 
 ;; This program is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU General Public License as
@@ -1221,36 +1221,34 @@ Other arguments are passed to `esqlite-async-read'."
 ;;;
 
 ;;;###autoload
-(defun esqlite-call/stream (file func)
+(defmacro esqlite-call/stream (file func)
   "Open FILE as esqlite database.
 FUNC accept just one arg created stream object from `esqlite-stream-open'."
-  (let* ((stream (esqlite-stream-open file))
-         ;; like a synchronously function
-         (inhibit-redisplay t))
-    (unwind-protect
-        (funcall func stream)
-      (esqlite-stream-close stream))))
-
-(put 'esqlite-call/stream 'lisp-indent-function 1)
+  (declare (indent 1))
+  `(let* ((stream (esqlite-stream-open ,file))
+          ;; like a synchronously function
+          (inhibit-redisplay t))
+     (unwind-protect
+         (funcall ,func stream)
+       (esqlite-stream-close stream))))
 
 ;;;###autoload
-(defun esqlite-call/transaction (file func)
+(defmacro esqlite-call/transaction (file func)
   "Open FILE as esqlite database and begin/commit/rollback transaction.
 FUNC accept just one arg created stream object from `esqlite-stream-open'."
-  (esqlite-call/stream file
-    (lambda (stream)
-      (esqlite-stream-execute stream "BEGIN")
-      (condition-case err
-          (prog1
-              (funcall func stream)
-            (esqlite-stream-execute stream "COMMIT"))
-        (error
-         ;; stream close automatically same as doing ROLLBACK.
-         ;; but explicitly call this.
-         (esqlite-stream-execute stream "ROLLBACK")
-         (signal (car err) (cdr err)))))))
-
-(put 'esqlite-call/transaction 'lisp-indent-function 1)
+  (declare (indent 1))
+  `(esqlite-call/stream ,file
+     (lambda (stream)
+       (esqlite-stream-execute stream "BEGIN")
+       (condition-case err
+           (prog1
+               (funcall ,func stream)
+             (esqlite-stream-execute stream "COMMIT"))
+         (error
+          ;; stream close automatically same as doing ROLLBACK.
+          ;; but explicitly call this.
+          (esqlite-stream-execute stream "ROLLBACK")
+          (signal (car err) (cdr err)))))))
 
 ;;
 ;; Esqlite synchronous read/execute

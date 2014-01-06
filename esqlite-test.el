@@ -231,7 +231,17 @@
      (should (equal '("あイｳ") (esqlite-read-top db "SELECT text FROM hoge WHERE id = 1")))
      (should (equal "あイｳ" (esqlite-read-atom db "SELECT text FROM hoge WHERE id = 1"))))))
 
-;;TODO esqlite-call/stream transaction
+(ert-deftest format-call-macro ()
+  :tags '(esqlite)
+  (esqlite-test-call/tempfile
+   (lambda (db)
+     (esqlite-call/stream db
+       (lambda (s)
+         (should (equal (esqlite-stream-read-atom s "SELECT 1") "1"))))
+     (esqlite-call/transaction db
+       (lambda (s)
+         (should (equal (esqlite-stream-read-atom s "SELECT 1") "1")))))))
+
 ;;TODO prepare big test data file.
 ;;TODO helm interactive test
 
