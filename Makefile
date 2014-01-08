@@ -5,7 +5,7 @@ ARCHIVE_DIR_PREFIX = ..
 GOMI	= *.elc *~
 
 RELEASE_FILES = \
-	esqlite-helm.el esqlite-mode.el	esqlite.el
+	esqlite-helm.el esqlite.el
 
 # Check with default settings
 check: compile
@@ -19,7 +19,7 @@ check-developer :
 
 compile:
 	emacs -q -batch -L . -L Emacs-pcsv -eval \
-	  "(progn (byte-compile-file \"esqlite.el\") (byte-compile-file \"esqlite-helm.el\") (byte-compile-file \"esqlite-mode.el\"))";
+	  "(progn (byte-compile-file \"esqlite.el\") (byte-compile-file \"esqlite-helm.el\"))";
 
 clean:
 	rm -rf $(GOMI)
