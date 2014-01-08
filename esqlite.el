@@ -1,11 +1,11 @@
-;;; esqlite.el --- sqlite file manipulate utilities
+;;; esqlite.el --- Manipulate sqlite file from Emacs
 
 ;; Author: Masahiro Hayashi <mhayashi1120@gmail.com>
 ;; Keywords: data
 ;; URL: https://github.com/mhayashi1120/Emacs-esqlite/raw/master/esqlite.el
 ;; Emacs: GNU Emacs 24 or later
 ;; Package-Requires: ((pcsv "1.3.3"))
-;; Version: 0.1.1
+;; Version: 0.1.2
 
 ;; This program is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU General Public License as
@@ -47,6 +47,9 @@
 ;; Please install from MELPA. (http://melpa.milkbox.net/)
 
 ;;; TODO:
+
+;; * esqlite-prepare function
+;;   
 
 ;;; Code:
 
@@ -408,7 +411,7 @@ This form check syntax error report from esqlite command."
   (generate-new-buffer " *esqlite work* "))
 
 (defun esqlite-start-csv-process (file-or-key &optional query nullvalue &rest args)
-  "[Low level API] Start async esqlite process.
+  "[Low level API] Start async sqlite process.
 If QUERY is specified, exit immediately after execute the QUERY.
 
 Cygwin: FILE name contains multibyte char, may fail to open FILE as database."
@@ -445,7 +448,7 @@ Cygwin: FILE name contains multibyte char, may fail to open FILE as database."
     proc))
 
 (defun esqlite-call-csv-process (file query &optional nullvalue &rest args)
-  "[Low level API] Call esqlite process.
+  "[Low level API] Call sqlite process.
 
 Cygwin: FILE contains multibyte char, may fail to open FILE as database."
   (let* ((init (esqlite--default-init-file))
@@ -636,7 +639,7 @@ Delete csv data if reading was succeeded."
 
 ;;;###autoload
 (defun esqlite-escape-string (string &optional quote-char)
-  "Escape STRING as a esqlite string object context.
+  "Escape STRING as a sqlite string object context.
 Optional QUOTE-CHAR arg indicate quote-char
 
 e.g.
@@ -695,7 +698,7 @@ To create the like pattern:
    ((stringp object)
     (if (or (multibyte-string-p object)
             ;; only ascii (printable chars) or empty string
-            ;; some of exception, control chars must be escape.
+            ;; some of exception, control chars must be escaped.
             (string-match "\\`[\t\n\r\x20-\x7e]*\\'" object))
         (concat
          "'"
@@ -995,7 +998,7 @@ Very Bad: SELECT 'Non terminated quote
   "Open FILE stream as sqlite database.
 Optional REUSE indicate get having been opened stream.
 
-This function return process as stream object, but
+This function return process as `esqlite-stream' object, but
  do not use this as a process object. This object style
  may be changed in future release."
   (check-type file string)
@@ -1256,7 +1259,7 @@ FUNC accept just one arg created stream object from `esqlite-stream-open'."
 
 ;;;###autoload
 (defun esqlite-read (file query &rest args)
-  "Read QUERY result in esqlite FILE.
+  "Read QUERY result from sqlite FILE.
 This function designed with SELECT QUERY, but works fine another
  sql query (UPDATE/INSERT/DELETE).
 
@@ -1361,13 +1364,13 @@ Elements of the item list are:
                  (equal (nth 5 row) "1"))))
 
 (defun esqlite-file-tables (file)
-  "esqlite FILE tables"
+  "Sqlite FILE tables"
   (esqlite-call/stream file
     (lambda (stream)
       (esqlite-read-tables stream))))
 
 (defun esqlite-file-table-columns (file table)
-  "esqlite FILE TABLE columns"
+  "Sqlite FILE TABLE columns"
   (esqlite-call/stream file
     (lambda (stream)
       (esqlite-read-table-columns stream table))))

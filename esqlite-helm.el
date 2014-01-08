@@ -1,11 +1,11 @@
-;;; esqlite-helm.el --- Define helm source for esqlite database
+;;; esqlite-helm.el --- Define helm source for sqlite database
 
 ;; Author: Masahiro Hayashi <mhayashi1120@gmail.com>
 ;; Keywords: data
 ;; URL: https://github.com/mhayashi1120/Emacs-esqlite/raw/master/esqlite-helm.el
 ;; Emacs: GNU Emacs 24 or later
 ;; Package-Requires: ((esqlite "0.1.0") (helm "20131207.845"))
-;; Version: 0.1.0
+;; Version: 0.1.1
 
 ;; This program is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU General Public License as
