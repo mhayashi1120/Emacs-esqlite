@@ -5,7 +5,7 @@
 ;; URL: https://github.com/mhayashi1120/Emacs-esqlite/raw/master/esqlite.el
 ;; Emacs: GNU Emacs 24 or later
 ;; Package-Requires: ((pcsv "1.3.3"))
-;; Version: 0.1.2
+;; Version: 0.1.3
 
 ;; This program is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU General Public License as
@@ -503,7 +503,7 @@ NOTE: If BLOB data contains non text byte (null-byte), this
 This function is not checking hex is valid."
   (apply 'unibyte-string
          (loop for start from 0 below (length hex) by 2
-               for end from (if (oddp (length hex)) 1 2) by 2
+               for end from (if (eq (logand (length hex) 1) 1) 1 2) by 2
                collect (string-to-number (substring hex start end) 16))))
 
 ;;

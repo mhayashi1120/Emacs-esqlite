@@ -2,6 +2,7 @@
 ;;TODO switch esqlite command version.
 
 (require 'ert)
+(require 'cl)
 
 (defun esqlite-test-wait-exit (process)
   (while (eq (process-status process) 'run) (sleep-for 0.01)))
