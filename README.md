@@ -9,7 +9,9 @@ staying permanently as emacs subprocess
 Programmer must manage the stream todo
 
 [Function] esqlite-stream-open
+
 [Function] esqlite-stream-read, esqlite-stream-read-top, esqlite-stream-read-atom, esqlite-stream-read-list
+
 [Function] esqlite-stream-close
 
 sample:
@@ -41,6 +43,7 @@ sample:
 ### Read DB schema
 
 [Function] esqlite-read-all-objects, esqlite-read-views, esqlite-read-tables, esqlite-read-indexes, esqlite-read-triggers
+
 [Function] esqlite-read-table-schema, esqlite-read-table-columns
 
 sample: todo
@@ -55,9 +58,15 @@ sample: todo
 
 [Function] esqlite-format-text
 
-     (esqlite-text "a'b")
+     (esqlite-format-text "a'b")
    
   => "'a''b'"
+
+[Function] esqlite-format-blob
+
+     (esqlite-format-blob "a\00b")
+
+  => "x'610062'"
 
 [Function] esqlite-escape-like
 
@@ -74,10 +83,6 @@ sample: todo
         " WHERE 1 = 1 "
         ,@(and type
                `(" AND type = %T{type}"))))
-
-[Function] esqlite-format-blob
-
-todo
 
 ## Helm
 
