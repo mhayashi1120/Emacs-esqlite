@@ -5,8 +5,7 @@ Manipulate sqlite file from Emacs
 
 ### Stream API
 
-staying permanently as emacs subprocess
-Programmer must manage the stream todo
+Staying permanently as a stream. Programmer can manage the stream as you like with using following API:
 
 [Function] esqlite-stream-open
 
