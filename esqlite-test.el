@@ -53,7 +53,10 @@
               (esqlite-stream-read-top stream "SELECT text FROM hoge WHERE id = 3")))
      (should (equal
               "あイｳ"
-              (esqlite-stream-read-atom stream "SELECT text FROM hoge WHERE id = 3"))))))
+              (esqlite-stream-read-atom stream "SELECT text FROM hoge WHERE id = 3")))
+     (should (equal
+              '("bz" "あイｳ")
+              (esqlite-stream-read-list stream "SELECT text FROM hoge WHERE id ORDER BY text"))))))
 
 (ert-deftest normal-0002 ()
   :tags '(esqlite)
@@ -149,6 +152,26 @@
             (should (esqlite-stream-read-atom stream (format "SELECT a FROM foo WHERE a = %d" i)))
           (esqlite-stream-close stream))))))
 
+(ert-deftest normal-0008 ()
+  :tags '(esqlite)
+  (esqlite-test-call/tempfile
+   (lambda (file)
+     (let ((stream (esqlite-stream-open file)))
+       (esqlite-stream-execute
+        stream
+        (esqlite-format
+         '("CREATE TABLE hoge ("
+           "  id INTEGER NOT NULL PRIMARY KEY"
+           ", text TEXT "
+           ", date TEXT DEFAULT (datetime('now'))"
+           ")")))
+       (should (equal '("hoge") (esqlite-read-tables stream)))
+       (should (equal '("hoge") (esqlite-read-tables file)))
+       (should (equal '("id" "text" "date") (esqlite-read-table-columns stream "hoge")))
+       (should (equal '("id" "text" "date") (esqlite-read-table-columns file "hoge")))
+       (should (equal '("hoge") (esqlite-read-all-objects stream)))
+       ))))
+
 (ert-deftest irregular-0001 ()
   :tags '(esqlite)
   (esqlite-test-call/stream
@@ -178,6 +201,7 @@
      (should (esqlite-stream-alive-p stream)))))
 
 (ert-deftest irregular-0003 ()
+  "Should not be error but ignore if error. ;-)"
   :tags '(esqlite)
   (esqlite-test-call/stream
    (lambda (stream)
@@ -230,7 +254,9 @@
      ;; unterminated string in query
      (should-error (esqlite-read db "SELECT '") :type 'esqlite-unterminate-query)
      (should (equal '("あイｳ") (esqlite-read-top db "SELECT text FROM hoge WHERE id = 1")))
-     (should (equal "あイｳ" (esqlite-read-atom db "SELECT text FROM hoge WHERE id = 1"))))))
+     (should (equal "あイｳ" (esqlite-read-atom db "SELECT text FROM hoge WHERE id = 1")))
+     (esqlite-read db "INSERT INTO hoge \nVALUES (2, 'eo');")
+     (should (equal '("あイｳ" "eo") (esqlite-read-list db "SELECT text FROM hoge"))))))
 
 (ert-deftest format-call-macro ()
   :tags '(esqlite)

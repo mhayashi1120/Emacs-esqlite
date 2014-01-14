@@ -4,8 +4,8 @@
 ;; Keywords: data
 ;; URL: https://github.com/mhayashi1120/Emacs-esqlite/raw/master/esqlite-helm.el
 ;; Emacs: GNU Emacs 24 or later
-;; Package-Requires: ((esqlite "0.1.0") (helm "20131207.845"))
-;; Version: 0.1.1
+;; Package-Requires: ((esqlite "0.1.4") (helm "20131207.845"))
+;; Version: 0.1.2
 
 ;; This program is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU General Public License as
@@ -157,12 +157,7 @@ Example:
   (let* ((table (assoc-default 'sqlite-table source))
          (column (assoc-default 'sqlite-column source))
          (dispcolumn (assoc-default 'sqlite-display-column source))
-         (columns (cond
-                   ((esqlite-stream-p file-or-stream)
-                    (esqlite-read-table-columns file-or-stream table))
-                   ((stringp file-or-stream)
-                    (esqlite-file-table-columns file-or-stream table))
-                   (t (error "esqlite-helm: Assert"))))
+         (columns (esqlite-read-table-columns file-or-stream table))
          (limit (or (assoc-default 'candidate-number-limit source) 100)))
     (unless table
       (error "esqlite-helm: `sqlite-table' is missing"))

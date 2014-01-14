@@ -5,7 +5,7 @@
 ;; URL: https://github.com/mhayashi1120/Emacs-esqlite/raw/master/esqlite.el
 ;; Emacs: GNU Emacs 24 or later
 ;; Package-Requires: ((pcsv "1.3.3"))
-;; Version: 0.1.3
+;; Version: 0.1.4
 
 ;; This program is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU General Public License as
@@ -189,16 +189,20 @@ Please download and install fakecygpty (Google it!!)"
                 (substring b64 0 length)))))
 
 (defun esqlite-unique-name (stream prefix &optional seed)
-  (loop with objects = (esqlite-read--objects stream)
+  (loop with objects = (esqlite-read-all-objects stream)
         with full-name
-        while (let ((random-text (esqlite--random-text (or seed "") 40)))
+        while (let ((random-text (esqlite--random-text
+                                  (or seed "") 40)))
                 (setq full-name (format "%s_%s" prefix random-text))
                 (member full-name objects))
         finally return full-name))
 
+(defconst esqlite-control-code-regexp
+  "[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
 (defun esqlite--check-control-code (command)
    ;; except TAB, CR, LF
-  (when (string-match "[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]" command)
+  (when (string-match esqlite-control-code-regexp command)
     (error "Invalid sql statement (May cause stall the process)")))
 
 (defun esqlite--terminate-command (command)
@@ -696,15 +700,21 @@ To create the like pattern:
 (defun esqlite-format-value (object)
   (cond
    ((stringp object)
-    (if (or (multibyte-string-p object)
-            ;; only ascii (printable chars) or empty string
-            ;; some of exception, control chars must be escaped.
-            (string-match "\\`[\t\n\r\x20-\x7e]*\\'" object))
-        (concat
-         "'"
-         (replace-regexp-in-string "'" "''" object)
-         "'")
-      (esqlite-format-blob object)))
+    (cond
+     (
+      ;; unsafe ascii as a blob data.
+      ;; some of exception, control chars must be escaped
+      ;; as a blob
+      (string-match esqlite-control-code-regexp object)
+      (esqlite-format-blob object))
+     (
+      ;; only ascii (printable chars) or empty string.
+      (or (string-match "\\`[\t\n\r\x20-\x7e]*\\'" object)
+          (multibyte-string-p object))
+      (esqlite-format-text object))
+     (t
+      ;; unibyte string
+      (esqlite-format-blob object))))
    ((numberp object)
     (prin1-to-string object))
    ((eq object :null) "null")
@@ -713,12 +723,16 @@ To create the like pattern:
    (t
     (esqlite--error "Not a supported type"))))
 
-(defun esqlite-format-blob (unibyte)
-  (when (or (not (stringp unibyte))
-            (multibyte-string-p unibyte))
-    (esqlite--error "Not a unibyte string"))
-  (format "x'%s'" (mapconcat (lambda (x) (format "%02x" x))
-                             unibyte "")))
+(defun esqlite-format-blob (text)
+  (let ((unibyte
+         (cond
+          ((not (stringp text))
+           (esqlite--error "Not a string"))
+          ((multibyte-string-p text)
+           (encode-coding-string text 'utf-8))
+          (t text))))
+    (format "x'%s'" (mapconcat (lambda (x) (format "%02x" x))
+                               unibyte ""))))
 
 (eval-and-compile
   (defvar esqlite-format--table
@@ -1106,6 +1120,15 @@ No performance advantage. You need to choose LIMIT statement by your own."
 to get a first item of the results."
   (car-safe (esqlite-stream-read-top stream query)))
 
+(defun esqlite-stream-read-list (stream query)
+  "Convenience function with wrapping `esqlite-stream-read'
+to get all items as flatten list.
+
+e.g.
+SELECT item FROM hoge
+ => (\"item1\" \"item2\")"
+  (mapcar 'car-safe (esqlite-stream-read stream query)))
+
 (defun esqlite-stream-prompt-p (stream)
   (esqlite-stream--with-buffer stream
     (esqlite--prompt-p)))
@@ -1210,7 +1233,7 @@ WARNINGS: See `esqlite-hex-to-bytes'."
   "Utility function to wrap `esqlite-async-read'
 This function expect non result set QUERY.
 FINALIZE is function which call with no argument.
-Other arguments are passed to `esqlite-async-read'."
+ARGS are passed to `esqlite-async-read'."
   (let ((filter (if finalize
                     `(lambda (xs)
                        (when (eq xs :EOF)
@@ -1305,16 +1328,26 @@ of the results."
   (car-safe (apply 'esqlite-read-top file query args)))
 
 ;;;###autoload
+(defun esqlite-read-list (file query &rest args)
+  "Convenience function with wrapping `esqlite-stream-read'
+to get all items as flatten list.
+
+e.g.
+SELECT item FROM hoge
+ => (\"item1\" \"item2\")"
+  (mapcar 'car-safe (apply 'esqlite-read file query args)))
+
+;;;###autoload
 (defun esqlite-execute (file sql)
   "Same as `esqlite-read' but intentional to use non SELECT statement."
   (esqlite-read file sql)
   nil)
 
 ;;
-;; Read object from esqlite database
+;; Read object from esqlite database (Generic functions)
 ;;
 
-(defun esqlite-read--objects (stream &optional type)
+(defun esqlite-read--objects (stream-or-file &optional type)
   (let* ((query
           (esqlite-format
            `(
@@ -1322,28 +1355,41 @@ of the results."
              " FROM sqlite_master "
              " WHERE 1 = 1 "
              ,@(and type
-                    `(" AND type = %T{type}")))))
-         (data (esqlite-stream-read stream query)))
-    (mapcar 'car data)))
+                    `(" AND type = %T{type}"))
+             " ORDER BY name ASC")))
+         (reader (if (esqlite-stream-p stream-or-file)
+                     'esqlite-stream-read-list
+                   'esqlite-read-list)))
+    (funcall reader stream-or-file query)))
 
-(defun esqlite-read-views (stream)
-  (esqlite-read--objects stream "view"))
+;;;###autoload
+(defun esqlite-read-all-objects (stream-or-file)
+  (esqlite-read--objects stream-or-file))
 
-(defun esqlite-read-tables (stream)
-  (esqlite-read--objects stream "table"))
+;;;###autoload
+(defun esqlite-read-views (stream-or-file)
+  (esqlite-read--objects stream-or-file "view"))
 
-(defun esqlite-read-indexes (stream)
-  (esqlite-read--objects stream "index"))
+;;;###autoload
+(defun esqlite-read-tables (stream-or-file)
+  (esqlite-read--objects stream-or-file "table"))
 
-(defun esqlite-read-triggers (stream)
-  (esqlite-read--objects stream "trigger"))
+;;;###autoload
+(defun esqlite-read-indexes (stream-or-file)
+  (esqlite-read--objects stream-or-file "index"))
 
-(defun esqlite-read-table-columns (stream table)
-  (loop for (_r1 col . _ignore) in (esqlite-read-table-schema stream table)
+;;;###autoload
+(defun esqlite-read-triggers (stream-or-file)
+  (esqlite-read--objects stream-or-file "trigger"))
+
+;;;###autoload
+(defun esqlite-read-table-columns (stream-or-file table)
+  (loop for (_r1 col . _ignore) in (esqlite-read-table-schema stream-or-file table)
         collect col))
 
-(defun esqlite-read-table-schema (stream table)
-  "Get TABLE information in FILE.
+;;;###autoload
+(defun esqlite-read-table-schema (stream-or-file table)
+  "Get TABLE information in STREAM-OR-FILE.
 Elements of the item list are:
 0. cid
 1. name with lowcase
@@ -1351,10 +1397,12 @@ Elements of the item list are:
 3. not null (boolean)
 4. default_value
 5. primary key (boolean)"
-  (loop for row in (esqlite-stream-read
-                    stream (esqlite-format
-                            "PRAGMA table_info(%o)"
-                            table))
+  (loop with reader = (if (esqlite-stream-p stream-or-file)
+                          'esqlite-stream-read
+                        'esqlite-read)
+        for row in (funcall
+                    reader stream-or-file
+                    (esqlite-format "PRAGMA table_info(%o)" table))
         collect (list
                  (string-to-number (nth 0 row))
                  (downcase (nth 1 row))
@@ -1365,21 +1413,19 @@ Elements of the item list are:
 
 (defun esqlite-file-tables (file)
   "Sqlite FILE tables"
-  (esqlite-call/stream file
-    (lambda (stream)
-      (esqlite-read-tables stream))))
+  (esqlite-read-tables file))
 
 (defun esqlite-file-table-columns (file table)
   "Sqlite FILE TABLE columns"
-  (esqlite-call/stream file
-    (lambda (stream)
-      (esqlite-read-table-columns stream table))))
+  (esqlite-read-table-columns file table))
 
 (defun esqlite-file-table-schema (file table)
   "See `esqlite-read-table-schema'"
-  (esqlite-call/stream file
-    (lambda (stream)
-      (esqlite-read-table-schema stream table))))
+  (esqlite-read-table-schema file table))
+
+(make-obsolete 'esqlite-file-tables 'esqlite-read-tables)
+(make-obsolete 'esqlite-file-table-columns 'esqlite-read-table-columns)
+(make-obsolete 'esqlite-file-table-schema 'esqlite-read-table-schema)
 
 ;;;
 ;;; Package load/unload
