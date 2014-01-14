@@ -49,7 +49,7 @@
 ;;; TODO:
 
 ;; * esqlite-prepare function
-;;   
+;;
 
 ;;; Code:
 
@@ -289,12 +289,12 @@ Normally, no need to use this parameter.")
           esqlite-process-coding-system))
    (t default-process-coding-system)))
 
-(eval-when-compile
+(eval-and-compile
   (defconst esqlite--prompt "sqlite> "))
 
 ;; continue prompt is empty.
 ;; otherwise, first row of SELECT contains the continue prompt.
-(eval-when-compile
+(eval-and-compile
   (defconst esqlite--prompt-continue "   ...> "))
 
 (defconst esqlite--prompt-re-any-continue
