@@ -1423,9 +1423,9 @@ Elements of the item list are:
   "See `esqlite-read-table-schema'"
   (esqlite-read-table-schema file table))
 
-(make-obsolete 'esqlite-file-tables 'esqlite-read-tables)
-(make-obsolete 'esqlite-file-table-columns 'esqlite-read-table-columns)
-(make-obsolete 'esqlite-file-table-schema 'esqlite-read-table-schema)
+(make-obsolete 'esqlite-file-tables 'esqlite-read-tables "0.1.4")
+(make-obsolete 'esqlite-file-table-columns 'esqlite-read-table-columns "0.1.4")
+(make-obsolete 'esqlite-file-table-schema 'esqlite-read-table-schema "0.1.4")
 
 ;;;
 ;;; Package load/unload
