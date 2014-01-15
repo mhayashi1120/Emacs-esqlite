@@ -38,7 +38,7 @@ sample:
 
     (esqlite-async-read "database.sqlite" "SELECT * FROM hoge"
 	   (lambda (data) (message "%s" (mapcocnat 'identity data ", "))))
-	   
+
 ### Read DB schema
 
 [Function] esqlite-read-all-objects, esqlite-read-views, esqlite-read-tables, esqlite-read-indexes, esqlite-read-triggers
@@ -94,7 +94,7 @@ Here is a firefox "places.sqlite" sample db:
 [Function] esqlite-format-text
 
      (esqlite-format-text "a'b")
-   
+
   => "'a''b'"
 
 [Function] esqlite-format-blob
@@ -107,12 +107,12 @@ Here is a firefox "places.sqlite" sample db:
 
     (esqlite-escape-string  "a'b")
 
-  => "a''b" 
+  => "a''b"
 
 [Function] esqlite-escape-like
 
       (esqlite-escape-like "F%OO_" ?\\)
-	  
+
   => "F\\%OO\\_"
 
 ## Helm

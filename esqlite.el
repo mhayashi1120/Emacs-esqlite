@@ -5,7 +5,7 @@
 ;; URL: https://github.com/mhayashi1120/Emacs-esqlite/raw/master/esqlite.el
 ;; Emacs: GNU Emacs 24 or later
 ;; Package-Requires: ((pcsv "1.3.3"))
-;; Version: 0.1.4
+;; Version: 0.1.5
 
 ;; This program is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU General Public License as
@@ -43,8 +43,8 @@
 
 ;;; Install:
 
-;; Please install sqlite command.
-;; Please install from MELPA. (http://melpa.milkbox.net/)
+;; Please install sqlite command. (http://www.sqlite.org/)
+;; Please install this package from MELPA. (http://melpa.milkbox.net/)
 
 ;;; TODO:
 
@@ -117,6 +117,30 @@ Default is the latest release of sqlite."
                    nil)
                   (t
                    (esqlite--error "Assert (Not supported type)"))))))
+
+(defun esqlite-object= (s1 s2)
+  (and (stringp s1)
+       (stringp s2)
+       (eq (compare-strings s1 nil nil s2 nil nil t) t)))
+
+(defun esqlite-object-assoc (key alist)
+  (assoc-string key alist t))
+
+(defun esqlite-object-member (elt list)
+  (member-ignore-case elt list))
+
+(defun esqlite-object-rassoc (key alist)
+  (loop for cell in alist
+        if (esqlite-object= key (cdr-safe cell))
+        return cell))
+
+(defun esqlite-trim (text)
+  ;; sql query may be not a huge text.
+  ;; so non-greedy match to text.
+  (if (string-match "\\`[\s\t\n]*\\(.*?\\)[\s\t\n]*\\'" text)
+      (match-string 1 text)
+    ;; never reach here
+    text))
 
 ;;;
 ;;; System deps
@@ -784,6 +808,8 @@ e.g.
 %O: escape db objects with quote (joined by \", \")
 %V: escape sql value(s) with quote if need
   (if list, joined by \", \" without paren)
+%X: escape text as hex notation.
+    multibyte string is encoded as utf-8 string.
 
 \(fn fmt &rest objects)"
   (with-temp-buffer
@@ -950,8 +976,8 @@ COMMAND is a command line that may ommit newline."
 This function return after checking syntax error of SQL.
 
 SQL is a sql statement that may ommit statement end `;'.
- Do Not send multiple statements (compound statements) or
- comment statement. This may cause STREAM stalling.
+ Do Not send multiple statements (compound statements).
+ This may cause STREAM stalling.
 
 Examples:
 Good: SELECT * FROM table1;
@@ -977,6 +1003,8 @@ Very Bad: SELECT 'Non terminated quote
 ;;
 
 (defun esqlite-stream-status (stream)
+  "Valid statuses are:
+`exit', `prompt', `continue', `querying'"
   (cond
    ((not (esqlite-stream-alive-p stream))
     'exit)
@@ -1155,6 +1183,22 @@ Both DECODING/ENCODING are ommited, revert to default encoding/decoding."
       (set-buffer-multibyte multibytep))
     (set-process-coding-system stream new-dec new-enc)))
 
+(defmacro esqlite-stream-with-transaction (stream &rest forms)
+  "Execute FORMS wrapped with transaction."
+  (declare (indent 1))
+  (let ((stream-var (make-symbol "stream")))
+    `(let ((,stream-var ,stream))
+       (esqlite-stream-execute ,stream-var "BEGIN")
+       (condition-case err
+           (prog1
+               (progn ,@forms)
+             (esqlite-stream-execute ,stream-var "COMMIT"))
+         (error
+          ;; stream close automatically same as doing ROLLBACK.
+          ;; but explicitly call this.
+          (esqlite-stream-execute ,stream-var "ROLLBACK")
+          (signal (car err) (cdr err)))))))
+
 ;;;
 ;;; Esqlite asynchronous read/execute
 ;;;
@@ -1251,30 +1295,24 @@ ARGS are passed to `esqlite-async-read'."
   "Open FILE as esqlite database.
 FUNC accept just one arg created stream object from `esqlite-stream-open'."
   (declare (indent 1))
-  `(let* ((stream (esqlite-stream-open ,file))
-          ;; like a synchronously function
-          (inhibit-redisplay t))
-     (unwind-protect
-         (funcall ,func stream)
-       (esqlite-stream-close stream))))
+  (let ((stream (make-symbol "stream")))
+    `(let* ((,stream (esqlite-stream-open ,file))
+            ;; like a synchronously function
+            (inhibit-redisplay t))
+       (unwind-protect
+           (funcall ,func ,stream)
+         (esqlite-stream-close ,stream)))))
 
 ;;;###autoload
 (defmacro esqlite-call/transaction (file func)
   "Open FILE as esqlite database and begin/commit/rollback transaction.
 FUNC accept just one arg created stream object from `esqlite-stream-open'."
   (declare (indent 1))
-  `(esqlite-call/stream ,file
-     (lambda (stream)
-       (esqlite-stream-execute stream "BEGIN")
-       (condition-case err
-           (prog1
-               (funcall ,func stream)
-             (esqlite-stream-execute stream "COMMIT"))
-         (error
-          ;; stream close automatically same as doing ROLLBACK.
-          ;; but explicitly call this.
-          (esqlite-stream-execute stream "ROLLBACK")
-          (signal (car err) (cdr err)))))))
+  (let ((stream (make-symbol "stream")))
+    `(esqlite-call/stream ,file
+       (lambda (,stream)
+         (esqlite-stream-with-transaction ,stream
+           (,func ,stream))))))
 
 ;;
 ;; Esqlite synchronous read/execute
@@ -1286,7 +1324,7 @@ FUNC accept just one arg created stream object from `esqlite-stream-open'."
 This function designed with SELECT QUERY, but works fine another
  sql query (UPDATE/INSERT/DELETE).
 
-ARGS accept some of esqlite command arguments but do not use it
+ARGS accept some of sqlite command arguments but do not use it
  unless you understand what you are doing.
 
 WARNINGS: See `esqlite-hex-to-bytes'."
