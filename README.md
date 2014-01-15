@@ -47,7 +47,7 @@ sample:
 
 Read database schema as a list
 
-Sample here is a firefox "places.sqlite" db:
+Here is a firefox "places.sqlite" sample db:
 
     (esqlite-read-tables "places.sqlite")
 
@@ -61,19 +61,8 @@ Sample here is a firefox "places.sqlite" db:
 
 ### Construct SQL
 
-[Function] esqlite-escape-string
-
-    (esqlite-escape-string  "a'b")
-
-  => "a''b" 
-
-[Function] esqlite-escape-like
-
-      (esqlite-escape-like "F%OO_" ?\\)
-	  
-  => "F\\%OO\\_"
-
 [Function] esqlite-format-value
+
   The most convenient function to encode Emacs object to SQL.
 
     (esqlite-format-value "a")
@@ -92,6 +81,16 @@ Sample here is a firefox "places.sqlite" db:
 
    => "'a', 'b'"
 
+[Function] esqlite-format
+
+     (esqlite-format
+       `(
+        "SELECT name "
+        " FROM sqlite_master "
+        " WHERE 1 = 1 "
+        ,@(and type
+               `(" AND type = %T{type}"))))
+
 [Function] esqlite-format-text
 
      (esqlite-format-text "a'b")
@@ -104,15 +103,17 @@ Sample here is a firefox "places.sqlite" db:
 
   => "x'610062'"
 
-[Function] esqlite-format
+[Function] esqlite-escape-string
 
-     (esqlite-format
-       `(
-        "SELECT name "
-        " FROM sqlite_master "
-        " WHERE 1 = 1 "
-        ,@(and type
-               `(" AND type = %T{type}"))))
+    (esqlite-escape-string  "a'b")
+
+  => "a''b" 
+
+[Function] esqlite-escape-like
+
+      (esqlite-escape-like "F%OO_" ?\\)
+	  
+  => "F\\%OO\\_"
 
 ## Helm
 
