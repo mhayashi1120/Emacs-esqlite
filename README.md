@@ -55,6 +55,31 @@ sample: todo
 
   => "a''b" 
 
+[Function] esqlite-escape-like
+
+      (esqlite-escape-like "F%OO_" ?\\)
+	  
+  => "F\\%OO\\_"
+
+[Function] esqlite-format-value
+  The most convenient function to encode Emacs object to SQL.
+
+    (esqlite-format-value "a")
+
+   => "'a'"
+
+    (esqlite-format-value 1)
+
+   => "1"
+
+    (esqlite-format-value '(1 2 3))
+
+   => "1, 2, 3"
+
+    (esqlite-format-value '("a" "b"))
+
+   => "'a', 'b'"
+
 [Function] esqlite-format-text
 
      (esqlite-format-text "a'b")
@@ -66,12 +91,6 @@ sample: todo
      (esqlite-format-blob "a\00b")
 
   => "x'610062'"
-
-[Function] esqlite-escape-like
-
-      (esqlite-escape-like "F%OO_" ?\\)
-	  
-  => "F\\%OO\\_"
 
 [Function] esqlite-format
 
