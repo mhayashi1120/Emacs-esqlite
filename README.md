@@ -45,7 +45,19 @@ sample:
 
 [Function] esqlite-read-table-schema, esqlite-read-table-columns
 
-sample: todo
+Read database schema as a list
+
+Sample here is a firefox "places.sqlite" db:
+
+    (esqlite-read-tables "places.sqlite")
+
+  => ("moz_anno_attributes" "moz_annos" "moz_bookmarks" "moz_bookmarks_roots" "moz_favicons" "moz_historyvisits" "moz_inputhistory" "moz_items_annos" "moz_keywords" "moz_places" "sqlite_sequence" "sqlite_stat1")
+
+    (esqlite-read-table-schema
+     "places.sqlite"
+     "moz_anno_attributes")
+
+  => ((0 "id" "INTEGER" nil :null t) (1 "name" "VARCHAR(32)" t :null nil))
 
 ### Construct SQL
 
