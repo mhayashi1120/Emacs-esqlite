@@ -1,3 +1,5 @@
+EMACS = emacs
+
 PACKAGE = esqlite
 
 ARCHIVE_DIR_PREFIX = ..
@@ -9,20 +11,20 @@ RELEASE_FILES = \
 
 # Check with default settings
 check: compile
-	emacs -q -batch \
+	$(EMACS) -q -batch \
 		-l ./test/env.el \
-		-l Emacs-pcsv/pcsv.el -l esqlite.el -l esqlite-helm.el -l esqlite-test.el \
-		-eval "(ert-run-tests-batch-and-exit '(tag esqlite))"
-	emacs -q -batch \
+		-L ./Emacs-pcsv -l esqlite.el -l esqlite-helm.el -l esqlite-test.el \
+		-f ert-run-tests-batch-and-exit
+	$(EMACS) -q -batch \
 		-l ./test/env.el \
-		-l Emacs-pcsv/pcsv.el -l esqlite.elc -l esqlite-helm.elc -l esqlite-test.el \
-		-eval "(ert-run-tests-batch-and-exit '(tag esqlite))"
+		-L ./Emacs-pcsv -l esqlite.elc -l esqlite-helm.elc -l esqlite-test.el \
+		-f ert-run-tests-batch-and-exit
 
 check-developer :
 	./test/all-test.sh
 
 compile:
-	emacs -q -batch -L . -L Emacs-pcsv \
+	$(EMACS) -q -batch -L . -L Emacs-pcsv \
 	     -f batch-byte-compile $(RELEASE_FILES)
 
 clean:
