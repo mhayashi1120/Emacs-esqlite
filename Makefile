@@ -22,8 +22,8 @@ check-developer :
 	./test/all-test.sh
 
 compile:
-	emacs -q -batch -L . -L Emacs-pcsv -eval \
-	  "(progn (byte-compile-file \"esqlite.el\") (byte-compile-file \"esqlite-helm.el\"))";
+	emacs -q -batch -L . -L Emacs-pcsv \
+	     -f batch-byte-compile $(RELEASE_FILES)
 
 clean:
 	rm -rf $(GOMI)

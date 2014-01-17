@@ -40,8 +40,8 @@
 
 ;; do not require helm
 
-(declare-function 'helm-log "helm")
-(declare-function 'helm-get-current-source "helm")
+(declare-function helm-log "helm")
+(declare-function helm-get-current-source "helm")
 
 (defvar helm-pattern)
 (defvar helm-async-processes)
