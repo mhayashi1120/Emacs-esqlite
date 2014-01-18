@@ -56,7 +56,11 @@
               (esqlite-stream-read-atom stream "SELECT text FROM hoge WHERE id = 3")))
      (should (equal
               '("bz" "あイｳ")
-              (esqlite-stream-read-list stream "SELECT text FROM hoge WHERE id ORDER BY text"))))))
+              (esqlite-stream-read-list stream "SELECT text FROM hoge WHERE id ORDER BY text")))
+     (esqlite-stream-put stream 'hogehoge "HOGEHOGE")
+     (should (equal "HOGEHOGE" (esqlite-stream-get stream 'hogehoge)))
+     (esqlite-stream-put stream 'hogehoge "HOGEHOGE2")
+     (should (equal "HOGEHOGE2" (esqlite-stream-get stream 'hogehoge))))))
 
 (ert-deftest normal-0002 ()
   :tags '(esqlite)
@@ -218,6 +222,14 @@
      (should (equal (esqlite-stream-read stream "select\n 1;\n\n select\n '\n'\n; \nselect 3;\n\n") '(("1") ("\n") ("3"))))
      (should (equal (esqlite-stream-read stream "select\n 1;\n\n select\n '\n\n'\n; \nselect 3;\n\n") '(("1") ("\n\n") ("3"))))
      )))
+
+(ert-deftest irregular-0004 ()
+  "Cannot open file which has no permission"
+  :tags '(esqlite)
+  (esqlite-test-call/tempfile
+   (lambda (file)
+     (set-file-modes file ?\000)
+     (should-error (esqlite-stream-open file)))))
 
 (ert-deftest async-read-0001 ()
   :tags '(esqlite)

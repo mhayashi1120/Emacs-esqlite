@@ -5,7 +5,7 @@
 ;; URL: https://github.com/mhayashi1120/Emacs-esqlite/raw/master/esqlite.el
 ;; Emacs: GNU Emacs 24 or later
 ;; Package-Requires: ((pcsv "1.3.3"))
-;; Version: 0.1.5
+;; Version: 0.1.6
 
 ;; This program is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU General Public License as
@@ -49,7 +49,11 @@
 ;;; TODO:
 
 ;; * esqlite-prepare function
-;;
+;;   esqlite-format is not enough to construct just parameterized query.
+;;   This is simple example:
+;;   SELECT col1 FROM %O{tbl} WHERE id = %V{id}
+;;  but cannot expand like following pseudo code
+;;   (dolist (id some-ids) (func SELECT col1 FROM "tbl1" WHERE id = %V{id}))
 
 ;;; Code:
 
@@ -609,7 +613,6 @@ This function is not checking hex is valid."
 ;;
 
 (defun esqlite--read-csv-line (&optional null)
-  ;;FIXME:
   (esqlite--try-to-delete-halfway-prompt)
   (let ((errmsg (esqlite--read-syntax-error)))
     (when errmsg
@@ -809,7 +812,7 @@ e.g.
 %V: escape sql value(s) with quote if need
   (if list, joined by \", \" without paren)
 %X: escape text as hex notation.
-    multibyte string is encoded as utf-8 string.
+    multibyte string is encoded as utf-8 byte array.
 
 \(fn fmt &rest objects)"
   (with-temp-buffer
@@ -897,7 +900,7 @@ e.g.
     (set-process-query-on-exit-flag stream nil)
     (set-process-filter stream 'esqlite-stream--filter)
     (set-process-sentinel stream 'esqlite-stream--sentinel)
-    (esqlite-stream--wait stream)
+    (esqlite-stream--wait-first-prompt stream)
     stream))
 
 (defun esqlite-stream--maybe-error (proc query)
@@ -930,7 +933,13 @@ e.g.
 (defun esqlite-stream--sentinel (proc event)
   (esqlite--with-process proc
     (when (memq (process-status proc) '(exit signal))
-      (kill-buffer (current-buffer)))))
+      ;; delay several seconds to get buffer contents
+      (run-with-timer
+       5 nil
+       (lambda (buffer)
+         (when (buffer-live-p buffer)
+           (kill-buffer buffer)))
+       (current-buffer)))))
 
 (defun esqlite-stream--send-string (stream string)
   (esqlite-stream--with-buffer stream
@@ -993,17 +1002,20 @@ Very Bad: SELECT 'Non terminated quote
     (funcall sender stream query)))
 
 ;; wait until prompt to buffer
-(defun esqlite-stream--wait (stream)
+(defun esqlite-stream--wait-first-prompt (stream)
   (let ((inhibit-redisplay t))
     (esqlite-stream--with-buffer stream
-      (esqlite--until-prompt stream))))
+      (esqlite--until-prompt stream)
+      (let ((errmsg (esqlite--read-syntax-error)))
+        (when errmsg
+          (esqlite--error "%s" errmsg))))))
 
 ;;
 ;; public
 ;;
 
 (defun esqlite-stream-status (stream)
-  "Valid statuses are:
+  "Valid statuses are: 
 `exit', `prompt', `continue', `querying'"
   (cond
    ((not (esqlite-stream-alive-p stream))
@@ -1035,13 +1047,26 @@ Very Bad: SELECT 'Non terminated quote
   (unless (esqlite-stream-alive-p stream)
     (esqlite--error "Stream has been closed")))
 
+(defun esqlite-stream-put (stream propname value)
+  "Put stream a user defined property."
+  (let ((plist (process-get stream 'esqlite-properties)))
+    (unless plist
+      (setq plist (list propname nil))
+      (process-put stream 'esqlite-properties plist))
+    (plist-put plist propname value)))
+
+(defun esqlite-stream-get (stream propname)
+  "Get a user defined property from stream."
+  (let ((plist (process-get stream 'esqlite-properties)))
+    (plist-get plist propname)))
+
 ;;;###autoload
 (defun esqlite-stream-open (file &optional reuse)
   "Open FILE stream as sqlite database.
 Optional REUSE indicate get having been opened stream.
 
-This function return process as `esqlite-stream' object, but
- do not use this as a process object. This object style
+WARNING: This function return process as `esqlite-stream' object,
+ but do not use this as a process object. This object style
  may be changed in future release."
   (check-type file string)
   (esqlite-check-sqlite-program)
