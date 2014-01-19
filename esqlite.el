@@ -632,7 +632,14 @@ This function is not checking hex is valid."
             datum))))
 
 (defun esqlite--read-csv-line-with-deletion (null)
-  (when (memq system-type '(windows-nt))
+  (when (memq system-type '(
+                            windows-nt
+                            ;; FIXME: more investigate
+                            ;; darwin may have \r in process buffer.
+                            ;; cleanup the CR just in case.
+                            ;; https://github.com/mhayashi1120/Emacs-esqlite/issues/2
+                            darwin
+                            ))
     ;; wash unquoted carriage return
     (save-excursion
       (while (re-search-forward "\r$" nil t)
