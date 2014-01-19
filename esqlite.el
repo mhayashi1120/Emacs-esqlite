@@ -5,7 +5,7 @@
 ;; URL: https://github.com/mhayashi1120/Emacs-esqlite/raw/master/esqlite.el
 ;; Emacs: GNU Emacs 24 or later
 ;; Package-Requires: ((pcsv "1.3.3"))
-;; Version: 0.1.7
+;; Version: 0.1.8
 
 ;; This program is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU General Public License as
@@ -37,7 +37,7 @@
 ;; * NULL handling (denote as :null keyword)
 
 ;; Following environments are tested:
-;; * Windows7 cygwin64 (sqlite 3.8.2)
+;; * Windows7 cygwin64 with fakecygpty (sqlite 3.8.2)
 ;; * Windows7 native binary (Not enough works)
 ;; * Debian Linux (sqlite 3.7.13)
 
@@ -52,7 +52,7 @@
 ;;   esqlite-format is not enough to construct just parameterized query.
 ;;   This is simple example:
 ;;   SELECT col1 FROM %O{tbl} WHERE id = %V{id}
-;;  but cannot expand like following pseudo code
+;;  but hard to expand like following pseudo code
 ;;   (dolist (id some-ids) (func SELECT col1 FROM "tbl1" WHERE id = %V{id}))
 
 ;;; Code:
