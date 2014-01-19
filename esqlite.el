@@ -5,7 +5,7 @@
 ;; URL: https://github.com/mhayashi1120/Emacs-esqlite/raw/master/esqlite.el
 ;; Emacs: GNU Emacs 24 or later
 ;; Package-Requires: ((pcsv "1.3.3"))
-;; Version: 0.1.6
+;; Version: 0.1.7
 
 ;; This program is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU General Public License as
@@ -1015,7 +1015,7 @@ Very Bad: SELECT 'Non terminated quote
 ;;
 
 (defun esqlite-stream-status (stream)
-  "Valid statuses are: 
+  "Valid statuses are:
 `exit', `prompt', `continue', `querying'"
   (cond
    ((not (esqlite-stream-alive-p stream))
