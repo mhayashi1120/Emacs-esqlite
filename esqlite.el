@@ -393,6 +393,8 @@ Normally, no need to use this parameter.")
      ;; currently no meanings of this
      ;; in the future release may support i18n.
      (setenv "LANG" "C")
+     ;; TODO
+     (setenv "TERM" "dumb")
      ,@form))
 
 (defmacro esqlite--with-process (proc &rest form)
