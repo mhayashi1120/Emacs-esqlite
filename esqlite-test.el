@@ -229,7 +229,6 @@
   (esqlite-test-call/tempfile
    (lambda (file)
      (set-file-modes file ?\000)
-     ;; FIXME travis environment might fail test.
      (sleep-for 1)
      (should-error (esqlite-stream-open file)))))
 
