@@ -137,8 +137,8 @@
      (should-error (esqlite-stream-async-execute stream "INSERT '") :type 'esqlite-unterminate-query)
      ;; terminate the previous statement (but error)
      (should-error (esqlite-stream-async-execute stream "'"))
-     (should (equal (esqlite-stream-read stream "SELECT a,b,c FROM foo WHERE a = 1")
-                    '(("1" "1" "1")))))))
+     (should (equal '(("1" "1" "1"))
+                    (esqlite-stream-read stream "SELECT a,b,c FROM foo WHERE a = 1"))))))
 
 (ert-deftest normal-0007 ()
   :tags '(esqlite)
@@ -204,23 +204,29 @@
      ;; stream still alive
      (should (esqlite-stream-alive-p stream)))))
 
+(defmacro esqlite-test-but (form)
+  `(condition-case err
+       ,form
+     (error
+      (message "Error but can ignore: %S" err))))
+
 (ert-deftest irregular-0003 ()
   "Should not be error but ignore if error. ;-)"
   :tags '(esqlite)
   (esqlite-test-call/stream
    (lambda (stream)
      ;; contain error statement in compound statement
-     (should-error (esqlite-stream-read stream "select\n 1;\n\n select; select 3;\n"))
+     (esqlite-test-but (should-error (esqlite-stream-read stream "select\n 1;\n\n select; select 3;\n")))
 
      ;; compound statement may have newlines
-     (should (equal (esqlite-stream-read stream "select 1; select 2; select 3;") '(("1") ("2") ("3"))))
-     (should (equal (esqlite-stream-read stream "select 1;\n select 2; select 3;") '(("1") ("2") ("3"))))
-     (should (equal (esqlite-stream-read stream "select\n 1;\n select\n 2; select 3;") '(("1") ("2") ("3"))))
-     (should (equal (esqlite-stream-read stream "select\n 1;\n\n select\n 2; select 3;\n\n") '(("1") ("2") ("3"))))
-     (should (equal (esqlite-stream-read stream "select\n 1;\n\n select\n 2\n; \nselect 3;\n\n") '(("1") ("2") ("3"))))
+     (esqlite-test-but (should (equal (esqlite-stream-read stream "select 1; select 2; select 3;") '(("1") ("2") ("3")))))
+     (esqlite-test-but (should (equal (esqlite-stream-read stream "select 1;\n select 2; select 3;") '(("1") ("2") ("3")))))
+     (esqlite-test-but (should (equal (esqlite-stream-read stream "select\n 1;\n select\n 2; select 3;") '(("1") ("2") ("3")))))
+     (esqlite-test-but (should (equal (esqlite-stream-read stream "select\n 1;\n\n select\n 2; select 3;\n\n") '(("1") ("2") ("3")))))
+     (esqlite-test-but (should (equal (esqlite-stream-read stream "select\n 1;\n\n select\n 2\n; \nselect 3;\n\n") '(("1") ("2") ("3")))))
 
-     (should (equal (esqlite-stream-read stream "select\n 1;\n\n select\n '\n'\n; \nselect 3;\n\n") '(("1") ("\n") ("3"))))
-     (should (equal (esqlite-stream-read stream "select\n 1;\n\n select\n '\n\n'\n; \nselect 3;\n\n") '(("1") ("\n\n") ("3"))))
+     (esqlite-test-but (should (equal (esqlite-stream-read stream "select\n 1;\n\n select\n '\n'\n; \nselect 3;\n\n") '(("1") ("\n") ("3")))))
+     (esqlite-test-but (should (equal (esqlite-stream-read stream "select\n 1;\n\n select\n '\n\n'\n; \nselect 3;\n\n") '(("1") ("\n\n") ("3")))))
      )))
 
 (ert-deftest irregular-0004 ()
@@ -229,6 +235,7 @@
   (esqlite-test-call/tempfile
    (lambda (file)
      (set-file-modes file ?\000)
+     (sleep-for 1)
      (should-error (esqlite-stream-open file)))))
 
 (ert-deftest async-read-0001 ()
@@ -269,6 +276,14 @@
      (should (equal "あイｳ" (esqlite-read-atom db "SELECT text FROM hoge WHERE id = 1")))
      (esqlite-read db "INSERT INTO hoge \nVALUES (2, 'eo');")
      (should (equal '("あイｳ" "eo") (esqlite-read-list db "SELECT text FROM hoge"))))))
+
+(ert-deftest read-irregular-0001 ()
+  :tags '(esqlite)
+  (esqlite-test-call/tempfile
+   (lambda (db)
+     (set-file-modes db ?\000)
+     (sleep-for 1)
+     (should-error (esqlite-read db "select 1;")))))
 
 (ert-deftest format-call-macro ()
   :tags '(esqlite)
