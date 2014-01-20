@@ -223,7 +223,7 @@
      (esqlite-test-should-but (equal (esqlite-stream-read stream "select\n 1;\n select\n 2; select 3;") '(("1") ("2") ("3"))))
      (esqlite-test-should-but (equal (esqlite-stream-read stream "select\n 1;\n\n select\n 2; select 3;\n\n") '(("1") ("2") ("3"))))
      (esqlite-test-should-but (equal (esqlite-stream-read stream "select\n 1;\n\n select\n 2\n; \nselect 3;\n\n") '(("1") ("2") ("3"))))
-     
+
      (esqlite-test-should-but (equal (esqlite-stream-read stream "select\n 1;\n\n select\n '\n'\n; \nselect 3;\n\n") '(("1") ("\n") ("3"))))
      (esqlite-test-should-but (equal (esqlite-stream-read stream "select\n 1;\n\n select\n '\n\n'\n; \nselect 3;\n\n") '(("1") ("\n\n") ("3"))))
      )))
@@ -275,6 +275,14 @@
      (should (equal "あイｳ" (esqlite-read-atom db "SELECT text FROM hoge WHERE id = 1")))
      (esqlite-read db "INSERT INTO hoge \nVALUES (2, 'eo');")
      (should (equal '("あイｳ" "eo") (esqlite-read-list db "SELECT text FROM hoge"))))))
+
+(ert-deftest read-irregular-0001 ()
+  :tags '(esqlite)
+  (esqlite-test-call/tempfile
+   (lambda (db)
+     (set-file-modes db ?\000)
+     (sleep-for 1)
+     (should-error (esqlite-read db "select 1;")))))
 
 (ert-deftest format-call-macro ()
   :tags '(esqlite)
