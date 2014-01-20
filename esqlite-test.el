@@ -208,7 +208,7 @@
   `(condition-case err
        (should ,form)
      (error
-      (message "Error %s but can ignore."))))
+      (message "Error %s but can ignore." err))))
 
 (ert-deftest irregular-0003 ()
   "Should not be error but ignore if error. ;-)"
