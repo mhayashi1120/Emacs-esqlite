@@ -207,7 +207,8 @@
 (defmacro esqlite-test-should-but (form)
   `(condition-case err
        (should ,form)
-     (message "Error %s but can ignore.")))
+     (error
+      (message "Error %s but can ignore."))))
 
 (ert-deftest irregular-0003 ()
   "Should not be error but ignore if error. ;-)"
