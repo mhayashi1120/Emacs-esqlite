@@ -204,6 +204,11 @@
      ;; stream still alive
      (should (esqlite-stream-alive-p stream)))))
 
+(defmacro esqlite-test-should-but (form)
+  `(condition-case err
+       (should ,form)
+     (message "Error %s but can ignore.")))
+
 (ert-deftest irregular-0003 ()
   "Should not be error but ignore if error. ;-)"
   :tags '(esqlite)
@@ -213,14 +218,14 @@
      (should-error (esqlite-stream-read stream "select\n 1;\n\n select; select 3;\n"))
 
      ;; compound statement may have newlines
-     (should (equal (esqlite-stream-read stream "select 1; select 2; select 3;") '(("1") ("2") ("3"))))
-     (should (equal (esqlite-stream-read stream "select 1;\n select 2; select 3;") '(("1") ("2") ("3"))))
-     (should (equal (esqlite-stream-read stream "select\n 1;\n select\n 2; select 3;") '(("1") ("2") ("3"))))
-     (should (equal (esqlite-stream-read stream "select\n 1;\n\n select\n 2; select 3;\n\n") '(("1") ("2") ("3"))))
-     (should (equal (esqlite-stream-read stream "select\n 1;\n\n select\n 2\n; \nselect 3;\n\n") '(("1") ("2") ("3"))))
-
-     (should (equal (esqlite-stream-read stream "select\n 1;\n\n select\n '\n'\n; \nselect 3;\n\n") '(("1") ("\n") ("3"))))
-     (should (equal (esqlite-stream-read stream "select\n 1;\n\n select\n '\n\n'\n; \nselect 3;\n\n") '(("1") ("\n\n") ("3"))))
+     (esqlite-test-should-but (equal (esqlite-stream-read stream "select 1; select 2; select 3;") '(("1") ("2") ("3"))))
+     (esqlite-test-should-but (equal (esqlite-stream-read stream "select 1;\n select 2; select 3;") '(("1") ("2") ("3"))))
+     (esqlite-test-should-but (equal (esqlite-stream-read stream "select\n 1;\n select\n 2; select 3;") '(("1") ("2") ("3"))))
+     (esqlite-test-should-but (equal (esqlite-stream-read stream "select\n 1;\n\n select\n 2; select 3;\n\n") '(("1") ("2") ("3"))))
+     (esqlite-test-should-but (equal (esqlite-stream-read stream "select\n 1;\n\n select\n 2\n; \nselect 3;\n\n") '(("1") ("2") ("3"))))
+     
+     (esqlite-test-should-but (equal (esqlite-stream-read stream "select\n 1;\n\n select\n '\n'\n; \nselect 3;\n\n") '(("1") ("\n") ("3"))))
+     (esqlite-test-should-but (equal (esqlite-stream-read stream "select\n 1;\n\n select\n '\n\n'\n; \nselect 3;\n\n") '(("1") ("\n\n") ("3"))))
      )))
 
 (ert-deftest irregular-0004 ()
