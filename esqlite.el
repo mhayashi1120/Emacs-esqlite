@@ -1013,6 +1013,7 @@ Very Bad: SELECT 'Non terminated quote
   (let ((inhibit-redisplay t))
     (esqlite-stream--with-buffer stream
       (esqlite--until-prompt stream)
+      (message "-------------- %S ---------------" (buffer-string))
       (let ((errmsg (esqlite--read-syntax-error)))
         (when errmsg
           (esqlite--error "%s" errmsg))))))
