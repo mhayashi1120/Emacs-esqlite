@@ -283,6 +283,12 @@ Please download and install fakecygpty (Google it!!)"
       (error "Version not found"))
     (match-string 1)))
 
+;;FIXME try to fix async process in Mac OS
+(defun esqlite--check-async-interface ()
+  (when (memq system-type '(darwin))
+    (esqlite--error
+     "Currently this system cannot handle async family.")))
+
 ;;
 ;; process
 ;;
@@ -960,6 +966,7 @@ Format directive is same as `esqlite-prepare'
         return p))
 
 (defun esqlite-stream--open (file-or-key)
+  (esqlite--check-async-interface)
   (let* ((stream (esqlite-start-csv-process file-or-key)))
     (process-put stream 'esqlite-stream-process-p t)
     ;; Do not show confirm prompt when exiting.
@@ -1355,6 +1362,7 @@ this function.
 ARGS accept esqlite command arguments. (e.g. -header)
 
 WARNINGS: See `esqlite-hex-to-bytes'."
+  (esqlite--check-async-interface)
   (esqlite-check-sqlite-program)
   (unless (stringp query)
     (esqlite--error "No query is provided"))
