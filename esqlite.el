@@ -393,7 +393,7 @@ Normally, no need to use this parameter.")
      ;; currently no meanings of this
      ;; in the future release may support i18n.
      (setenv "LANG" "C")
-     ;; TODO
+     ;; execute process safety set the value.
      (setenv "TERM" "dumb")
      ,@form))
 

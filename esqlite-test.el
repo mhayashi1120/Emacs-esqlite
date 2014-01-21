@@ -25,7 +25,7 @@
          (esqlite-stream-close stream 0))))))
 
 (ert-deftest normal-0001 ()
-  :tags '(esqlite)
+  :tags '(esqlite esqlite-stream)
   (esqlite-test-call/stream
    (lambda (stream)
      (should (esqlite-stream-execute stream "CREATE TABLE hoge (id INTEGER PRIMARY KEY, text TEXT)"))
@@ -63,7 +63,7 @@
      (should (equal "HOGEHOGE2" (esqlite-stream-get stream 'hogehoge))))))
 
 (ert-deftest normal-0002 ()
-  :tags '(esqlite)
+  :tags '(esqlite esqlite-stream)
   (esqlite-test-call/stream
    (lambda (stream)
      (should (esqlite-stream-execute stream "CREATE TABLE hoge (id INTEGER PRIMARY KEY, text TEXT)"))
@@ -88,7 +88,7 @@
                'shift_jis))))))
 
 (ert-deftest normal-0003 ()
-  :tags '(esqlite)
+  :tags '(esqlite esqlite-stream)
   ;; try to create binary data
   ;; -csv option can't output which contain 0 byte sequence.
   ;;  shell.c says only handle TEXT data not BLOB.
@@ -111,7 +111,7 @@
        (esqlite-stream-reset-coding-system stream)))))
 
 (ert-deftest normal-0004 ()
-  :tags '(esqlite)
+  :tags '(esqlite esqlite-stream)
   (let ((s1 (esqlite-stream-memory 'test1))
         (s2 (esqlite-stream-memory 'test2)))
     (should (esqlite-stream-alive-p s1))
@@ -120,11 +120,11 @@
     (should-error (esqlite-stream-memory "a"))))
 
 (ert-deftest normal-0005 ()
-  :tags '(esqlite)
+  :tags '(esqlite esqlite-stream)
   (should-error (esqlite-stream-open 'test1)))
 
 (ert-deftest normal-0006 ()
-  :tags '(esqlite)
+  :tags '(esqlite esqlite-stream)
   (esqlite-test-call/stream
    (lambda (stream)
      (esqlite-stream-async-execute stream "CREATE TABLE foo(a,b,c)")
@@ -137,11 +137,11 @@
      (should-error (esqlite-stream-async-execute stream "INSERT '") :type 'esqlite-unterminate-query)
      ;; terminate the previous statement (but error)
      (should-error (esqlite-stream-async-execute stream "'"))
-     (should (equal '(("1" "1" "1"))
-                    (esqlite-stream-read stream "SELECT a,b,c FROM foo WHERE a = 1"))))))
+     (should (equal (esqlite-stream-read stream "SELECT a,b,c FROM foo WHERE a = 1")
+                    '(("1" "1" "1")))))))
 
 (ert-deftest normal-0007 ()
-  :tags '(esqlite)
+  :tags '(esqlite esqlite-stream)
   (let ((ms (esqlite-stream-memory)))
     (esqlite-stream-async-execute ms "CREATE TABLE foo(a)")
     (let ((i (random ?\xffffff))
@@ -157,7 +157,7 @@
           (esqlite-stream-close stream))))))
 
 (ert-deftest normal-0008 ()
-  :tags '(esqlite)
+  :tags '(esqlite esqlite-stream)
   (esqlite-test-call/tempfile
    (lambda (file)
      (let ((stream (esqlite-stream-open file)))
@@ -177,7 +177,7 @@
        ))))
 
 (ert-deftest irregular-0001 ()
-  :tags '(esqlite)
+  :tags '(esqlite esqlite-stream)
   (esqlite-test-call/stream
    (lambda (stream)
      (esqlite-stream-execute stream "CREATE TABLE hoge (id INTEGER PRIMARY KEY)")
@@ -195,7 +195,7 @@
      (should (esqlite-file-guessed-database-p db)))))
 
 (ert-deftest irregular-0002 ()
-  :tags '(esqlite)
+  :tags '(esqlite esqlite-stream)
   (esqlite-test-call/stream
    (lambda (stream)
      ;; unterminated string in query
@@ -204,34 +204,33 @@
      ;; stream still alive
      (should (esqlite-stream-alive-p stream)))))
 
-(defmacro esqlite-test-but (form)
+(defmacro esqlite-test-should-but (form)
   `(condition-case err
-       ,form
-     (error
-      (message "Error but can ignore: %S" err))))
+       (should ,form)
+     (message "Error %s but can ignore.")))
 
 (ert-deftest irregular-0003 ()
   "Should not be error but ignore if error. ;-)"
-  :tags '(esqlite)
+  :tags '(esqlite esqlite-stream)
   (esqlite-test-call/stream
    (lambda (stream)
      ;; contain error statement in compound statement
-     (esqlite-test-but (should-error (esqlite-stream-read stream "select\n 1;\n\n select; select 3;\n")))
+     (should-error (esqlite-stream-read stream "select\n 1;\n\n select; select 3;\n"))
 
      ;; compound statement may have newlines
-     (esqlite-test-but (should (equal (esqlite-stream-read stream "select 1; select 2; select 3;") '(("1") ("2") ("3")))))
-     (esqlite-test-but (should (equal (esqlite-stream-read stream "select 1;\n select 2; select 3;") '(("1") ("2") ("3")))))
-     (esqlite-test-but (should (equal (esqlite-stream-read stream "select\n 1;\n select\n 2; select 3;") '(("1") ("2") ("3")))))
-     (esqlite-test-but (should (equal (esqlite-stream-read stream "select\n 1;\n\n select\n 2; select 3;\n\n") '(("1") ("2") ("3")))))
-     (esqlite-test-but (should (equal (esqlite-stream-read stream "select\n 1;\n\n select\n 2\n; \nselect 3;\n\n") '(("1") ("2") ("3")))))
+     (esqlite-test-should-but (equal (esqlite-stream-read stream "select 1; select 2; select 3;") '(("1") ("2") ("3"))))
+     (esqlite-test-should-but (equal (esqlite-stream-read stream "select 1;\n select 2; select 3;") '(("1") ("2") ("3"))))
+     (esqlite-test-should-but (equal (esqlite-stream-read stream "select\n 1;\n select\n 2; select 3;") '(("1") ("2") ("3"))))
+     (esqlite-test-should-but (equal (esqlite-stream-read stream "select\n 1;\n\n select\n 2; select 3;\n\n") '(("1") ("2") ("3"))))
+     (esqlite-test-should-but (equal (esqlite-stream-read stream "select\n 1;\n\n select\n 2\n; \nselect 3;\n\n") '(("1") ("2") ("3"))))
 
-     (esqlite-test-but (should (equal (esqlite-stream-read stream "select\n 1;\n\n select\n '\n'\n; \nselect 3;\n\n") '(("1") ("\n") ("3")))))
-     (esqlite-test-but (should (equal (esqlite-stream-read stream "select\n 1;\n\n select\n '\n\n'\n; \nselect 3;\n\n") '(("1") ("\n\n") ("3")))))
+     (esqlite-test-should-but (equal (esqlite-stream-read stream "select\n 1;\n\n select\n '\n'\n; \nselect 3;\n\n") '(("1") ("\n") ("3"))))
+     (esqlite-test-should-but (equal (esqlite-stream-read stream "select\n 1;\n\n select\n '\n\n'\n; \nselect 3;\n\n") '(("1") ("\n\n") ("3"))))
      )))
 
 (ert-deftest irregular-0004 ()
   "Cannot open file which has no permission"
-  :tags '(esqlite)
+  :tags '(esqlite esqlite-stream)
   (esqlite-test-call/tempfile
    (lambda (file)
      (set-file-modes file ?\000)
@@ -239,7 +238,7 @@
      (should-error (esqlite-stream-open file)))))
 
 (ert-deftest async-read-0001 ()
-  :tags '(esqlite)
+  :tags '(esqlite esqlite-stream)
   (esqlite-test-call/tempfile
    (lambda (db)
      (esqlite-async-execute db "CREATE TABLE hoge (id);" (lambda ()))
@@ -286,7 +285,7 @@
      (should-error (esqlite-read db "select 1;")))))
 
 (ert-deftest format-call-macro ()
-  :tags '(esqlite)
+  :tags '(esqlite esqlite-stream)
   (esqlite-test-call/tempfile
    (lambda (db)
      (esqlite-call/stream db
