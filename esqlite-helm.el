@@ -4,8 +4,8 @@
 ;; Keywords: data
 ;; URL: https://github.com/mhayashi1120/Emacs-esqlite/raw/master/esqlite-helm.el
 ;; Emacs: GNU Emacs 24 or later
-;; Package-Requires: ((esqlite "0.1.4") (helm "20131207.845"))
-;; Version: 0.1.2
+;; Package-Requires: ((esqlite "0.2.0") (helm "20131207.845"))
+;; Version: 0.2.0
 
 ;; This program is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU General Public License as
@@ -168,16 +168,21 @@ Example:
                (limit ,limit)
                (search-columns ',(if column (list column) columns))
                (likepat (esqlite-helm-glob-to-fuzzy-like pattern)))
-           (esqlite-format
+           (esqlite-prepare
             '("SELECT %O{dispcolumns}"
               " FROM  %o{table}"
-              " WHERE %s"
+              " WHERE %s{where}"
               " LIMIT %s{limit}")
-            (mapconcat
-             (lambda (col)
-               (esqlite-format "%o{col} LIKE %T{likepat} ESCAPE '\\'"))
-             search-columns
-             " OR ")))))))
+            :where (mapconcat
+                    (lambda (col)
+                      (esqlite-prepare
+                       "%o{col} LIKE %T{likepat} ESCAPE '\\'"
+                       :col col))
+                    search-columns
+                    " OR ")
+            :dispcolumns dispcolumns
+            :table table
+            :limit limit))))))
 
 (defun esqlite-helm-match-function (cand)
   (string-match (esqlite-helm-glob-to-regexp helm-pattern) cand))
