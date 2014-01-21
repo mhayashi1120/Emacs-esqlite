@@ -81,15 +81,17 @@ Here is a firefox "places.sqlite" sample db:
 
    => "'a', 'b'"
 
-[Function] esqlite-format
+[Function] esqlite-prepare
 
-     (esqlite-format
+    (let ((type "table"))
+      (esqlite-prepare
        `(
-        "SELECT name "
-        " FROM sqlite_master "
-        " WHERE 1 = 1 "
-        ,@(and type
-               `(" AND type = %T{type}"))))
+         "SELECT name "
+         " FROM sqlite_master "
+         " WHERE 1 = 1 "
+         ,@(and type
+                `(" AND type = %T{type}")))
+       :type type))
 
 [Function] esqlite-format-text
 

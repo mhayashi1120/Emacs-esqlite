@@ -5,7 +5,7 @@
 ;; URL: https://github.com/mhayashi1120/Emacs-esqlite/raw/master/esqlite.el
 ;; Emacs: GNU Emacs 24 or later
 ;; Package-Requires: ((pcsv "1.3.3"))
-;; Version: 0.1.8
+;; Version: 0.2.0
 
 ;; This program is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU General Public License as
@@ -47,13 +47,6 @@
 ;; Please install this package from MELPA. (http://melpa.milkbox.net/)
 
 ;;; TODO:
-
-;; * esqlite-prepare function
-;;   esqlite-format is not enough to construct just parameterized query.
-;;   This is simple example:
-;;   SELECT col1 FROM %O{tbl} WHERE id = %V{id}
-;;  but hard to expand like following pseudo code
-;;   (dolist (id some-ids) (func SELECT col1 FROM "tbl1" WHERE id = %V{id}))
 
 ;;; Code:
 
@@ -797,17 +790,18 @@ To create the like pattern:
         ))))
 
 ;;;###autoload
-(defun esqlite-format (esqlite-fmt &rest esqlite-objects)
+(defun esqlite-prepare (fmt &rest keywords)
   "Prepare sql with FMT like `format'.
 
 FMT is a string or list of string.
  each list item join with newline.
 
-Each directive accept arg which contains variable name.
-  This variable name must not contain `esqlite-' prefix.
+Each directive accept arg which contains keyword name.
+  Undefined keyword is simply ignored.
 e.g.
-\(let ((some-var \"FOO\")) (esqlite-format \"%s %s{some-var}\" \"HOGE\"))
- => \"HOGE FOO\"
+\(esqlite-prepare \"SELECT * FROM %o{some-table} WHERE id = %s{some-value}\"\
+ :some-table \"tbl\")
+ => \"SELECT * FROM \"tbl\" WHERE id = %s{some-value}\"
 
 %s: raw text (With no escape)
 %t: escape text
@@ -819,56 +813,120 @@ e.g.
 %V: escape sql value(s) with quote if need
   (if list, joined by \", \" without paren)
 %X: escape text as hex notation.
-    multibyte string is encoded as utf-8 byte array.
-
-\(fn fmt &rest objects)"
+    multibyte string is encoded as utf-8 byte array."
   (with-temp-buffer
-    (when (listp esqlite-fmt)
-      (setq esqlite-fmt (mapconcat 'identity esqlite-fmt "\n")))
-    (insert esqlite-fmt)
+    (when (listp fmt)
+      (setq fmt (mapconcat 'identity fmt "\n")))
+    (insert fmt)
     (goto-char (point-min))
-    (let ((esqlite-fmt-regexp
+    (let ((fmt-regexp
            (eval-when-compile
              (concat
               (regexp-opt (mapcar 'car esqlite-format--table) t)
-              ;; Optional varname
-              "\\(?:{\\(.+?\\)}\\)?")))
+              ;; keyword name
+              "\\(?:{\\(.+?\\)}\\)")))
           (case-fold-search nil))
       (while (search-forward "%" nil t)
         (cond
          ((eq (char-after) ?%)
           (delete-char 1))
-         ((looking-at esqlite-fmt-regexp)
+         ((looking-at fmt-regexp)
           (let* ((spec (match-string 1))
                  (varname (match-string 2))
-                 (varsym (intern-soft varname))
+                 (keysym (and varname (intern-soft (concat ":" varname))))
                  (fn (assoc-default spec esqlite-format--table))
+                 (begin (1- (point)))
+                 (end (match-end 0))
                  obj)
-            (when (and varname (string-match "\\`esqlite-" varname))
-              (esqlite--error "Unable to use esqlite- prefix variable %s"
-                     varname))
-            ;; Delete formatter directive
-            (delete-region (1- (point)) (match-end 0))
-            (cond
-             (varsym
-              ;; raise error asis if varname is not defined.
-              (setq obj (symbol-value varsym)))
-             (esqlite-objects
-              (setq obj (car esqlite-objects))
-              (setq esqlite-objects (cdr esqlite-objects)))
-             (t
-              (esqlite--error "No value assigned to `%%%s'" spec)))
             (unless fn
               (esqlite--error "Invalid format character: `%%%s'" spec))
             (unless (functionp fn)
               (esqlite--error "Assert"))
-            (let ((val obj)
-                  text)
-              (setq text (funcall fn val))
-              (insert text)))))))
-    (when esqlite-objects
-      (esqlite--error "args out of range %s" esqlite-objects))
+            (cond
+             ((and keysym (plist-member keywords keysym))
+              ;; Delete formatter directive
+              (delete-region begin end)
+              (setq obj (plist-get keywords keysym))
+              (let ((text (funcall fn obj)))
+                (insert text))))))
+         (t
+          (esqlite--error "No valid format")))))
     (buffer-string)))
+
+;;;###autoload
+(defun esqlite-format (esqlite-fmt &rest esqlite-objects)
+  "This function is obsoleted should change to `esqlite-prepare'.
+This function is not working under `lexical-binding' is t.
+
+Prepare sql with FMT like `format'.
+
+FMT is a string or list of string.
+ each list item join with newline.
+
+Each directive accept arg which contains variable name.
+  This variable name must not contain `esqlite-' prefix.
+e.g.
+\(let ((some-var \"FOO\")) (esqlite-format \"%s %s{some-var}\" \"HOGE\"))
+ => \"HOGE FOO\"
+
+Format directive is same as `esqlite-prepare'
+
+\(fn fmt &rest objects)"
+  (let (prepared keywords)
+    (with-temp-buffer
+      (when (listp esqlite-fmt)
+        (setq esqlite-fmt (mapconcat 'identity esqlite-fmt "\n")))
+      (insert esqlite-fmt)
+      (goto-char (point-min))
+      (let ((esqlite-fmt-regexp
+             (eval-when-compile
+               (concat
+                (regexp-opt (mapcar 'car esqlite-format--table) t)
+                ;; Optional varname
+                "\\(?:{\\(.+?\\)}\\)?")))
+            (case-fold-search nil)
+            (i 0))
+        (while (search-forward "%" nil t)
+          (cond
+           ((eq (char-after) ?%)
+            (delete-char 1))
+           ((looking-at esqlite-fmt-regexp)
+            (let* ((spec (match-string 1))
+                   (varname (match-string 2))
+                   (end (match-end 0))
+                   (varsym (intern-soft varname))
+                   (keysym (and varname (intern (concat ":" varname))))
+                   (fn (assoc-default spec esqlite-format--table))
+                   obj)
+              (when (and varname (string-match "\\`esqlite-" varname))
+                (esqlite--error "Unable to use esqlite- prefix variable %s"
+                                varname))
+              (goto-char end)
+              (cond
+               (varsym
+                ;; raise error asis if varname is not defined.
+                (setq obj (symbol-value varsym)))
+               (esqlite-objects
+                ;; replace text match to `esqlite-prepare'
+                (setq obj (car esqlite-objects))
+                (setq esqlite-objects (cdr esqlite-objects))
+                (setq varname (format "esqlite-keyword-%s" i))
+                (insert "{" varname "}")
+                (setq keysym (intern (format ":%s" varname)))
+                (setq i (1+ i)))
+               (t
+                (esqlite--error "No value assigned to `%%%s'" spec)))
+              (unless fn
+                (esqlite--error "Invalid format character: `%%%s'" spec))
+              (unless keysym
+                (esqlite--error "No valid keyword"))
+              (setq keywords (append keywords (list keysym obj)))))))
+        (when esqlite-objects
+          (esqlite--error "args out of range %s" esqlite-objects))
+        (setq prepared (buffer-string))))
+    (apply 'esqlite-prepare prepared keywords)))
+
+(make-obsolete 'esqlite-format 'esqlite-prepare "0.2.0")
 
 ;;;
 ;;; Esqlite stream
@@ -1013,6 +1071,7 @@ Very Bad: SELECT 'Non terminated quote
   (let ((inhibit-redisplay t))
     (esqlite-stream--with-buffer stream
       (esqlite--until-prompt stream)
+      ;; No header information when exited immediately after exec
       (let ((errmsg (esqlite--read-syntax-error)))
         (when errmsg
           (esqlite--error "%s" errmsg))))))
@@ -1419,14 +1478,15 @@ SELECT item FROM hoge
 
 (defun esqlite-read--objects (stream-or-file &optional type)
   (let* ((query
-          (esqlite-format
+          (esqlite-prepare
            `(
              "SELECT name "
              " FROM sqlite_master "
              " WHERE 1 = 1 "
              ,@(and type
                     `(" AND type = %T{type}"))
-             " ORDER BY name ASC")))
+             " ORDER BY name ASC")
+           :type type))
          (reader (if (esqlite-stream-p stream-or-file)
                      'esqlite-stream-read-list
                    'esqlite-read-list)))
@@ -1472,7 +1532,9 @@ Elements of the item list are:
                         'esqlite-read)
         for row in (funcall
                     reader stream-or-file
-                    (esqlite-format "PRAGMA table_info(%o)" table))
+                    (esqlite-prepare
+                     "PRAGMA table_info(%o{table})"
+                     :table table))
         collect (list
                  (string-to-number (nth 0 row))
                  (downcase (nth 1 row))

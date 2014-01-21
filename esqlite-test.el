@@ -137,8 +137,8 @@
      (should-error (esqlite-stream-async-execute stream "INSERT '") :type 'esqlite-unterminate-query)
      ;; terminate the previous statement (but error)
      (should-error (esqlite-stream-async-execute stream "'"))
-     (should (equal '(("1" "1" "1"))
-                    (esqlite-stream-read stream "SELECT a,b,c FROM foo WHERE a = 1"))))))
+     (should (equal (esqlite-stream-read stream "SELECT a,b,c FROM foo WHERE a = 1")
+                    '(("1" "1" "1")))))))
 
 (ert-deftest normal-0007 ()
   :tags '(esqlite)
@@ -396,6 +396,26 @@
     "\"odd \"\" table\""
     (esqlite-format "%o" "odd \" table")))
 
+  )
+
+(ert-deftest prepare-0001 ()
+  :tags '(esqlite)
+  (should (equal "" (esqlite-prepare "")))
+  (should (equal "1" (esqlite-prepare "%V{a}" :a 1)))
+  (should (equal "'1'" (esqlite-prepare "%V{a}" :a "1")))
+  (should (equal "'%%%'" (esqlite-prepare "%V{a}" :a "%%%")))
+  (should (equal "'%%%'" (esqlite-prepare "'%t{a}'" :a "%%%")))
+  (should (equal "\"tbl1\"" (esqlite-prepare "%o{t}" :t "tbl1")))
+  (should (equal "\"col1\", \"col2\"" (esqlite-prepare "%O{cols}" :cols '("col1" "col2"))))
+  ;; utf-8 encoding
+  (should (equal "x'e38182'" (esqlite-prepare "%X{text}" :text "あ")))
+  ;; encode manually
+  (should (equal "x'a4a2'" (esqlite-prepare "%X{text}" :text (encode-coding-string "あ" 'euc-jp))))
+  (should (equal "LIKE 'search' ESCAPE '\\' " (esqlite-prepare "LIKE %L{text}" :text "search")))
+  (should (equal "LIKE '\\%search\\%' ESCAPE '\\' " (esqlite-prepare "LIKE %L{text}" :text "%search%")))
+  (should (equal "LIKE '%\\%search%' ESCAPE '\\'" (esqlite-prepare "LIKE '%%%l{text}%%' ESCAPE '\\'" :text "%search")))
+  (should (equal "LIKE '%search%'" (esqlite-prepare "LIKE %T{text}" :text "%search%")))
+  (should (equal "SELECT\n1" (esqlite-prepare '("SELECT" "1"))))
   )
 
 (ert-deftest number-0001 ()
