@@ -137,8 +137,8 @@
      (should-error (esqlite-stream-async-execute stream "INSERT '") :type 'esqlite-unterminate-query)
      ;; terminate the previous statement (but error)
      (should-error (esqlite-stream-async-execute stream "'"))
-     (should (equal (esqlite-stream-read stream "SELECT a,b,c FROM foo WHERE a = 1")
-                    '(("1" "1" "1")))))))
+     (should (equal '(("1" "1" "1"))
+                    (esqlite-stream-read stream "SELECT a,b,c FROM foo WHERE a = 1"))))))
 
 (ert-deftest normal-0007 ()
   :tags '(esqlite esqlite-stream)
@@ -208,7 +208,7 @@
   `(condition-case err
        ,form
      (error
-      (message "Error but can ignore %S." err))))
+      (message "Error but can ignore: %S" err))))
 
 (ert-deftest irregular-0003 ()
   "Should not be error but ignore if error. ;-)"
