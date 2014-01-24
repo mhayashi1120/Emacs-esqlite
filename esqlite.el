@@ -5,7 +5,7 @@
 ;; URL: https://github.com/mhayashi1120/Emacs-esqlite/raw/master/esqlite.el
 ;; Emacs: GNU Emacs 24 or later
 ;; Package-Requires: ((pcsv "1.3.3"))
-;; Version: 0.2.0
+;; Version: 0.2.1
 
 ;; This program is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU General Public License as
@@ -836,8 +836,10 @@ e.g.
           (case-fold-search nil))
       (while (search-forward "%" nil t)
         (cond
+         ((get-text-property (point) 'esqlite-prepared))
          ((eq (char-after) ?%)
-          (delete-char 1))
+          (delete-char 1)
+          (put-text-property (1- (point)) (point) 'esqlite-prepared t))
          ((looking-at fmt-regexp)
           (let* ((spec (match-string 1))
                  (varname (match-string 2))
@@ -856,7 +858,8 @@ e.g.
               (delete-region begin end)
               (setq obj (plist-get keywords keysym))
               (let ((text (funcall fn obj)))
-                (insert text))))))
+                (insert text))
+              (put-text-property begin (point) 'esqlite-prepared t)))))
          (t
           (esqlite--error "No valid format")))))
     (buffer-string)))
@@ -932,7 +935,9 @@ Format directive is same as `esqlite-prepare'
         (when esqlite-objects
           (esqlite--error "args out of range %s" esqlite-objects))
         (setq prepared (buffer-string))))
-    (apply 'esqlite-prepare prepared keywords)))
+    (let ((query (apply 'esqlite-prepare prepared keywords)))
+      (remove-text-properties 0 (length query) '(esqlite-prepared t) query)
+      query)))
 
 (make-obsolete 'esqlite-format 'esqlite-prepare "0.2.0")
 
