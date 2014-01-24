@@ -404,6 +404,9 @@
   (should (equal "'1'" (esqlite-prepare "%V{a}" :a "1")))
   (should (equal "'%%%'" (esqlite-prepare "%V{a}" :a "%%%")))
   (should (equal "'%%%'" (esqlite-prepare "'%t{a}'" :a "%%%")))
+  (let ((prepared (esqlite-prepare "SELECT * FROM tbl1 WHERE col1 = %V{constant-cond} AND col2 = %V{optional-cond}" :constant-cond "%%")))
+    (should (equal "SELECT * FROM tbl1 WHERE col1 = '%%' AND col2 = 'option1'" (esqlite-prepare prepared :optional-cond "option1")))
+    (should (equal "SELECT * FROM tbl1 WHERE col1 = '%%' AND col2 = 'option2'" (esqlite-prepare prepared :optional-cond "option2"))))
   (should (equal "\"tbl1\"" (esqlite-prepare "%o{t}" :t "tbl1")))
   (should (equal "\"col1\", \"col2\"" (esqlite-prepare "%O{cols}" :cols '("col1" "col2"))))
   ;; utf-8 encoding
