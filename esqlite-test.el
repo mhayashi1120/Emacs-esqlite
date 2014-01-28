@@ -234,7 +234,6 @@
   (esqlite-test-call/tempfile
    (lambda (file)
      (set-file-modes file ?\000)
-     (sleep-for 1)
      (should-error (esqlite-stream-open file)))))
 
 (ert-deftest async-read-0001 ()
@@ -281,7 +280,6 @@
   (esqlite-test-call/tempfile
    (lambda (db)
      (set-file-modes db ?\000)
-     (sleep-for 1)
      (should-error (esqlite-read db "select 1;")))))
 
 (ert-deftest format-call-macro ()

@@ -116,22 +116,28 @@ Default is the latest release of sqlite."
                    (esqlite--error "Assert (Not supported type)"))))))
 
 (defun esqlite-object= (s1 s2)
+  "Return t if object name is equals in database."
   (and (stringp s1)
        (stringp s2)
        (eq (compare-strings s1 nil nil s2 nil nil t) t)))
 
 (defun esqlite-object-assoc (key alist)
+  "`assoc' with ignore case"
   (assoc-string key alist t))
 
 (defun esqlite-object-member (elt list)
+  "`member' with ignore case"
   (member-ignore-case elt list))
 
 (defun esqlite-object-rassoc (key alist)
+  "`rassoc' with ignore case"
   (loop for cell in alist
         if (esqlite-object= key (cdr-safe cell))
         return cell))
 
 (defun esqlite-trim (text)
+  "Remove head/tail whitespaces from TEXT.
+Do not use this function to huge TEXT."
   ;; sql query may be not a huge text.
   ;; so non-greedy match to text.
   (if (string-match "\\`[\s\t\n]*\\(.*?\\)[\s\t\n]*\\'" text)
@@ -499,7 +505,7 @@ Cygwin: FILE contains multibyte char, may fail to open FILE as database."
     ;; a multibyte string, command argument may be destroyed.
     ;; Although `call-process-region' may have same problem, but
     ;; decrease the risk of this.
-    ;; For example, database file have a multibyte name.
+    ;; For example, DB file might have a multibyte char.
     (apply
      'esqlite--call-process-region
      (current-buffer)
