@@ -5,7 +5,7 @@
 ;; URL: https://github.com/mhayashi1120/Emacs-esqlite/raw/master/esqlite.el
 ;; Emacs: GNU Emacs 24 or later
 ;; Package-Requires: ((pcsv "1.3.3"))
-;; Version: 0.2.1
+;; Version: 0.2.2
 
 ;; This program is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU General Public License as
@@ -1094,7 +1094,11 @@ Very Bad: SELECT 'Non terminated quote
       ;; No header information when exited immediately after exec
       (let ((errmsg (esqlite--read-syntax-error)))
         (when errmsg
-          (esqlite--error "%s" errmsg))))))
+          (esqlite--error "%s" errmsg)))
+      ;; sometimes exited process with no error message. I can't figure out it..
+      ;; forcibly exited stream with raising error.
+      (unless (memq (process-status stream) '(run))
+        (esqlite--error "Process was exited unknown reason")))))
 
 ;;
 ;; public

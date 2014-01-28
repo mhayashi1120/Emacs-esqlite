@@ -7,7 +7,7 @@ ARCHIVE_DIR_PREFIX = ..
 GOMI	= *.elc *~
 
 RELEASE_FILES = \
-	esqlite-helm.el esqlite.el
+	esqlite.el esqlite-helm.el
 
 ifeq ($(shell uname -s), Darwin)
 	BATCH_COMMAND = -eval "(ert-run-tests-batch-and-exit '(and (tag esqlite) (not (tag esqlite-stream))))"
