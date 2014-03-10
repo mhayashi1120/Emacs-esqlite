@@ -145,6 +145,61 @@ Do not use this function to huge TEXT."
     ;; never reach here
     text))
 
+(defun esqlite-value= (value1 value2)
+  "Trinary logic to compare equality."
+  (cond
+   ((or (eq value1 :null) (eq value2 :null))
+    :null)
+   ((equal value1 value2))))
+
+
+;;;
+;;; URI filenames
+;;;
+
+;; http://www.sqlite.org/uri.html
+
+(defun esqlite-filename-to-uri (file)
+  "Construct URI filenames from FILE."
+  (when (memq system-type '(windows-nt))
+    (setq file (replace-regexp-in-string "\\\\" "/" file)))
+  (concat
+   "file:"
+   (and (file-name-absolute-p file) "/")
+   (mapconcat
+    'identity
+    (mapcar
+     (lambda (x)
+       (setq x (replace-regexp-in-string "[?]" "%3f" x))
+       (setq x (replace-regexp-in-string "#" "%23" x))
+       x)
+     (split-string file "/" t))
+    "/")))
+
+(defun esqlite-uri-to-filename (uri)
+  "Extract filename from URI."
+  (destructuring-bind (file _)
+      (esqlite-uri-parse uri)
+    file))
+
+(defun esqlite-uri-parse (uri)
+  "Parse URI with filename and query parameters."
+  (unless (string-match "\\`file:\\(.*\\)" uri)
+    (error "Unable match file prefix %s" uri))
+  (let ((body (match-string 1 uri)))
+    (unless (string-match "\\`\\(.*?\\)\\(?:\\?\\(.*\\)\\)?\\'" body)
+      (error "Fatal parse error"))
+    (let* ((path (match-string 1 body))
+           (qs (match-string 2 body))
+           (file (url-unhex-string path))
+           (queries
+            (and qs
+                 (url-parse-query-string qs))))
+      ;; handle windows path
+      (when (string-match "\\`/\\([a-zA-Z]:/.*\\)" file)
+        (setq file (match-string 1 file)))
+      (list file queries))))
+
 ;;;
 ;;; System deps
 ;;;
@@ -438,13 +493,28 @@ This form check syntax error report from esqlite command."
    (apply 'call-process-region
           start end esqlite-sqlite-program nil buffer nil args)))
 
-(defun esqlite--expand-db-name (file)
-  (if (esqlite-mswin-cygwin-p)
-      ;; esqlite on cygwin cannot accept c:/hoge like path.
-      ;; must convert /cygdrive/c/hoge
-      ;; But seems accept such path in -init option.
-      (esqlite-mswin-cygpath file "unix")
-    (expand-file-name file)))
+(defun esqlite--safe-expand-file (file-or-uri)
+  (cond
+   ((string-match "\\`file:" file-or-uri)
+    ;; URI Filenames:
+    ;; http://www.sqlite.org/uri.html
+    file-or-uri)
+   (t
+    (expand-file-name file-or-uri))))
+
+(defun esqlite--expand-db-name (file-or-uri)
+  (cond
+   ((string-match "\\`file:" file-or-uri)
+    ;; URI Filenames:
+    ;; http://www.sqlite.org/uri.html
+    file-or-uri)
+   ((esqlite-mswin-cygwin-p)
+    ;; esqlite on cygwin cannot accept c:/hoge like path.
+    ;; must convert /cygdrive/c/hoge
+    ;; But seems accept such path in -init option.
+    (esqlite-mswin-cygpath file-or-uri "unix"))
+   (t
+    (expand-file-name file-or-uri))))
 
 (defun esqlite--create-process-buffer ()
   (generate-new-buffer " *esqlite work* "))
@@ -458,7 +528,7 @@ Cygwin: FILE name contains multibyte char, may fail to open FILE as database."
          (file (and (stringp file-or-key) file-or-key))
          (key (and (symbolp file-or-key) file-or-key))
          (db (and file (list (esqlite--expand-db-name file))))
-         (filename (and file (expand-file-name file)))
+         (filename (and file (esqlite--safe-expand-file file)))
          (null (or nullvalue (esqlite--temp-null query)))
          (query (and query (esqlite--terminate-statement query)))
          (args `(
@@ -970,7 +1040,7 @@ Format directive is same as `esqlite-prepare'
         return p))
 
 (defun esqlite-stream--reuse-file (file)
-  (loop with filename = (expand-file-name file)
+  (loop with filename = (esqlite--safe-expand-file file)
         for p in (process-list)
         if (and (esqlite-stream-alive-p p)
                 (string= (esqlite-stream-filename p) filename))

@@ -14,7 +14,8 @@
   (let ((db (esqlite-test-make-tempfile)))
     (unwind-protect
         (funcall proc-db db)
-      (delete-file db))))
+      (ignore-errors
+        (delete-file db)))))
 
 (defun esqlite-test-call/stream (proc-stream)
   (esqlite-test-call/tempfile
@@ -23,6 +24,13 @@
        (unwind-protect
            (funcall proc-stream stream)
          (esqlite-stream-close stream 0))))))
+
+(defun esqlite-test-file-unreadable (file)
+  (cond
+   ((memq system-type '(windows-nt))
+    (call-process-shell-command (format "icacls.exe  %s /deny `whoami`:F" file)))
+   (t
+    (set-file-modes file ?\000))))
 
 (ert-deftest normal-0001 ()
   :tags '(esqlite esqlite-stream)
@@ -137,6 +145,8 @@
      (should-error (esqlite-stream-async-execute stream "INSERT '") :type 'esqlite-unterminate-query)
      ;; terminate the previous statement (but error)
      (should-error (esqlite-stream-async-execute stream "'"))
+     ;;TODO  just wait a second (should serialize all query)
+     (sleep-for 1)
      (should (equal '(("1" "1" "1"))
                     (esqlite-stream-read stream "SELECT a,b,c FROM foo WHERE a = 1"))))))
 
@@ -233,7 +243,7 @@
   :tags '(esqlite esqlite-stream)
   (esqlite-test-call/tempfile
    (lambda (file)
-     (set-file-modes file ?\000)
+     (esqlite-test-file-unreadable file)
      (should-error (esqlite-stream-open file)))))
 
 (ert-deftest async-read-0001 ()
@@ -279,7 +289,7 @@
   :tags '(esqlite)
   (esqlite-test-call/tempfile
    (lambda (db)
-     (set-file-modes db ?\000)
+     (esqlite-test-file-unreadable db)
      (should-error (esqlite-read db "select 1;")))))
 
 (ert-deftest format-call-macro ()
@@ -425,3 +435,21 @@
   (should (esqlite-numeric-text-p "-3"))
   (should (esqlite-numeric-text-p "+4.0"))
   (should (esqlite-numeric-text-p "+4.0E50")))
+
+(ert-deftest uri-filenames-0001 ()
+  :tags '(esqlite)
+  (equal (esqlite-filename-to-uri "/path/to/hoge//?#tmp.sqlite") "file:/path/to/hoge/%3f%23tmp.sqlite")
+  (equal (esqlite-filename-to-uri "/path/to/hoge/#tmp.sqlite") "file:/path/to/hoge/%23tmp.sqlite")
+  (equal (esqlite-filename-to-uri "path/to/hoge/tmp.sqlite") "file:path/to/hoge/tmp.sqlite")
+  (when (memq system-type '(windows-nt))
+    (equal (esqlite-filename-to-uri "c:/path/to/aa.sqlite") "file:/c:/path/to/aa.sqlite")
+    (equal (esqlite-filename-to-uri "c:\\path\\to\\aa.sqlite") "file:/c:/path/to/aa.sqlite")))
+
+(ert-deftest uri-filenames-0002 ()
+  :tags '(esqlite)
+  (equal (esqlite-uri-to-filename "file:/path/to/hoge/%3f%23tmp.sqlite") "/path/to/hoge/?#tmp.sqlite")
+  (equal (esqlite-uri-to-filename "file:/path/to/hoge/%23tmp.sqlite") "/path/to/hoge/#tmp.sqlite")
+  (equal (esqlite-uri-to-filename "file:path/to/hoge/tmp.sqlite") "path/to/hoge/tmp.sqlite")
+  (when (memq system-type '(windows-nt))
+    (equal (esqlite-uri-to-filename "file:/c:/path/to/aa.sqlite") "c:/path/to/aa.sqlite")))
+
