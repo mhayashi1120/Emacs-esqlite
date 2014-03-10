@@ -157,10 +157,15 @@ Do not use this function to huge TEXT."
 ;;; URI filenames
 ;;;
 
-;; http://www.sqlite.org/uri.html
+;;;###autoload
+(defun esqlite-filename-to-uri (file &optional queries)
+  "Construct URI filenames from FILE.
 
-(defun esqlite-filename-to-uri (file)
-  "Construct URI filenames from FILE."
+\(esqlite-filename-to-uri \"/path/to/sqlite.db\" '((\"mode\" \"ro\") (\"cache\" \"shared\")))
+
+http://www.sqlite.org/uri.html
+
+"
   (when (memq system-type '(windows-nt))
     (setq file (replace-regexp-in-string "\\\\" "/" file)))
   (concat
@@ -174,7 +179,9 @@ Do not use this function to huge TEXT."
        (setq x (replace-regexp-in-string "#" "%23" x))
        x)
      (split-string file "/" t))
-    "/")))
+    "/")
+   (and queries "?")
+   (and queries (url-build-query-string queries))))
 
 (defun esqlite-uri-to-filename (uri)
   "Extract filename from URI."
@@ -183,7 +190,7 @@ Do not use this function to huge TEXT."
     file))
 
 (defun esqlite-uri-parse (uri)
-  "Parse URI with filename and query parameters."
+  "Parse URI to filename and query parameters."
   (unless (string-match "\\`file:\\(.*\\)" uri)
     (error "Unable match file prefix %s" uri))
   (let ((body (match-string 1 uri)))

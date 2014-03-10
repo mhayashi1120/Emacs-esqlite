@@ -125,3 +125,10 @@ https://github.com/emacs-helm/helm
 
 [Function] esqlite-helm-define
 
+
+## URI filenames
+
+[Function] esqlite-filename-to-uri
+
+http://www.sqlite.org/uri.html
+Convert local filename to sqlite URI filenames
