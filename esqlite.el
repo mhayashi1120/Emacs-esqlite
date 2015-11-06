@@ -462,6 +462,13 @@ Normally, no need to use this parameter.")
      (setenv "LANG" "C")
      ;; execute process safety set the value.
      (setenv "TERM" "dumb")
+     ;; FIXME TODO:
+     ;; suppress to save .sqlite_history to your home
+     ;; curretly sqlite3 shell.c use low level api read from
+     ;; /etc/passwd on Unix system
+     ;; (setenv "HOME" esqlite--temp-homedir)
+     ;; for windows
+     ;; (setenv "USERPROFILE" esqlite--temp-homedir)
      ,@form))
 
 (defmacro esqlite--with-process (proc &rest form)
