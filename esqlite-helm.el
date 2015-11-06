@@ -2,10 +2,10 @@
 
 ;; Author: Masahiro Hayashi <mhayashi1120@gmail.com>
 ;; Keywords: data
-;; URL: https://github.com/mhayashi1120/Emacs-esqlite/raw/master/esqlite-helm.el
+;; URL: https://github.com/mhayashi1120/Emacs-esqlite
 ;; Emacs: GNU Emacs 24 or later
 ;; Package-Requires: ((esqlite "0.2.0") (helm "20131207.845"))
-;; Version: 0.2.0
+;; Version: 0.2.1
 
 ;; This program is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU General Public License as
@@ -225,10 +225,9 @@ Example:
     (let ((buf (process-buffer proc)))
       (when (buffer-live-p buf)
         (kill-buffer buf)))
-    (let ((source (cdr (assq proc helm-async-processes))))
-      (unless (zerop (process-exit-status proc))
-        (helm-log "Error: esqlite %s"
-                  (replace-regexp-in-string "\n" "" event))))))
+    (unless (zerop (process-exit-status proc))
+      (helm-log "Error: esqlite %s"
+                (replace-regexp-in-string "\n" "" event)))))
 
 (defun esqlite-helm-hack-for-multiline (candidates)
   ;; helm split csv stream by newline. restore the csv as one text
@@ -246,12 +245,16 @@ Example:
   ;; OUTPUT-STRING: a,b\nc,"d\nD     CANDIDATES: ("a,b" "c,\"d")      INCOMPLETE-LINE: "D"
   ;; OUTPUT-STRING: a,b\nc,"d\n      CANDIDATES: ("a,b" "c,\"d")      INCOMPLETE-LINE: ""
   ;; OUTPUT-STRING: a,b\nc,"d        CANDIDATES: ("a,b")              INCOMPLETE-LINE: "c,\"d"
-  (let* ((rawtext (concat (mapconcat 'identity candidates "\n") "\n"))
-         (source (helm-get-current-source))
-         (incomplete-info (assq 'incomplete-line source)))
-    (destructuring-bind (data rest) (esqlite-helm--read-csv rawtext)
-      (setcdr incomplete-info (concat rest (cdr incomplete-info)))
-      data)))
+  (condition-case err
+      (let* ((rawtext (concat (mapconcat 'identity candidates "\n") "\n"))
+             (source (helm-get-current-source))
+             (incomplete-info (assq 'incomplete-line source)))
+        (destructuring-bind (data rest) (esqlite-helm--read-csv rawtext)
+          (setcdr incomplete-info (concat rest (cdr incomplete-info)))
+          data))
+    (error
+     (message "%s" err)
+     nil)))
 
 ;; try to read STRING until end.
 ;; csv line may not terminated and may contain newline.
