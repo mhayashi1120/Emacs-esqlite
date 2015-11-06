@@ -5,7 +5,7 @@
 ;; URL: https://github.com/mhayashi1120/Emacs-esqlite/raw/master/esqlite.el
 ;; Emacs: GNU Emacs 24 or later
 ;; Package-Requires: ((pcsv "1.3.3"))
-;; Version: 0.2.2
+;; Version: 0.2.3
 
 ;; This program is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU General Public License as
@@ -733,9 +733,26 @@ This function is not checking hex is valid."
     (delete-region start (point))
     row))
 
-(defun esqlite--read-csv-with-deletion (null)
-  "Read csv data from current point.
-Delete csv data if reading was succeeded."
+;; Call with one arg which is parsed row.
+;; This variable is intended to use in local dynamic binding.
+(defvar esqlite-read-callback nil)
+
+;; See `esqlite--read-csv-with-deletion-0'
+(defun esqlite--read-csv-with-deletion/callback (null callback)
+  (let (res)
+    (condition-case nil
+        (while (not (eobp))
+          (let ((start (point))
+                (row (esqlite--read-csv-line-with-deletion null)))
+            (setq res (cons row res))
+            (funcall callback row)))
+      ;; output is proceeding from process
+      ;; finish the reading
+      (invalid-read-syntax nil))
+    (nreverse res)))
+
+;; See `esqlite--read-csv-with-deletion/callback'
+(defun esqlite--read-csv-with-deletion-0 (null)
   (let (res)
     (condition-case nil
         (while (not (eobp))
@@ -746,6 +763,14 @@ Delete csv data if reading was succeeded."
       ;; finish the reading
       (invalid-read-syntax nil))
     (nreverse res)))
+
+(defun esqlite--read-csv-with-deletion (null)
+  "Read csv data from current point.
+Delete csv data if reading was succeeded."
+  (if esqlite-read-callback
+      (esqlite--read-csv-with-deletion/callback
+       null esqlite-read-callback)
+    (esqlite--read-csv-with-deletion-0 null)))
 
 ;;
 ;; Escape text (Emacs data -> Sqlite text)
@@ -1561,7 +1586,7 @@ of the results."
 ;;;###autoload
 (defun esqlite-read-list (file query &rest args)
   "Convenience function with wrapping `esqlite-stream-read'
-to get all items as flatten list.
+to get all first column as list.
 
 e.g.
 SELECT item FROM hoge
