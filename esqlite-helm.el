@@ -5,7 +5,7 @@
 ;; URL: https://github.com/mhayashi1120/Emacs-esqlite
 ;; Emacs: GNU Emacs 24 or later
 ;; Package-Requires: ((esqlite "0.2.0") (helm "20131207.845"))
-;; Version: 0.2.1
+;; Version: 0.2.4
 
 ;; This program is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU General Public License as
