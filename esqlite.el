@@ -5,7 +5,7 @@
 ;; URL: https://github.com/mhayashi1120/Emacs-esqlite
 ;; Emacs: GNU Emacs 24 or later
 ;; Package-Requires: ((pcsv "1.3.3"))
-;; Version: 0.2.3
+;; Version: 0.2.4
 
 ;; This program is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU General Public License as
@@ -453,6 +453,14 @@ Normally, no need to use this parameter.")
                 (insert (format ".prompt \"%s\" \"%s\"\n"
                                 esqlite--prompt
                                 esqlite--prompt-continue))
+                ;; Later 3.8.6 "-csv" output contains CR (\r) before LF (\n)
+                (when (version<= "3.8.6" (esqlite-sqlite-version))
+                  ;; FIXME: This is working for "-csv" option
+                  ;;  However, `.separator' first argument "," seems no effect for csv
+                  ;;  I think that sqlite3 may be confusing specification.
+                  ;;  `-newline' argument doesn't have such confusion.
+                  ;;  I probably should use this option.
+                  (insert ".separator \",\" \"\\n\"\n"))
                 (write-region (point-min) (point-max) file nil 'no-msg))
               file))))
 
