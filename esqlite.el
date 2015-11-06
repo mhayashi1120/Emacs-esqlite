@@ -2,7 +2,7 @@
 
 ;; Author: Masahiro Hayashi <mhayashi1120@gmail.com>
 ;; Keywords: data
-;; URL: https://github.com/mhayashi1120/Emacs-esqlite/raw/master/esqlite.el
+;; URL: https://github.com/mhayashi1120/Emacs-esqlite
 ;; Emacs: GNU Emacs 24 or later
 ;; Package-Requires: ((pcsv "1.3.3"))
 ;; Version: 0.2.3
@@ -41,10 +41,15 @@
 ;; * Windows7 native binary (Not enough works)
 ;; * Debian Linux (sqlite 3.7.13)
 
-;;; Install:
+;; ## Install:
 
 ;; Please install sqlite command. (http://www.sqlite.org/)
 ;; Please install this package from MELPA. (http://melpa.milkbox.net/)
+
+;; ## Usage:
+
+;; See the online document:
+;; https://github.com/mhayashi1120/Emacs-esqlite
 
 ;;; TODO:
 
