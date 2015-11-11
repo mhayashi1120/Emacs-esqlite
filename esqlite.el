@@ -5,7 +5,7 @@
 ;; URL: https://github.com/mhayashi1120/Emacs-esqlite
 ;; Emacs: GNU Emacs 24 or later
 ;; Package-Requires: ((pcsv "1.3.3"))
-;; Version: 0.2.4
+;; Version: 0.3.0
 
 ;; This program is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU General Public License as
@@ -1673,7 +1673,7 @@ Elements of the item list are:
 2. type with UPCASE
 3. not null (boolean)
 4. default_value
-5. primary key (boolean)"
+5. primary key order start from 1 (integer)"
   (loop with reader = (if (esqlite-stream-p stream-or-file)
                           'esqlite-stream-read
                         'esqlite-read)
@@ -1688,7 +1688,8 @@ Elements of the item list are:
                  (upcase (nth 2 row))
                  (equal (nth 3 row) "1")
                  (nth 4 row)
-                 (equal (nth 5 row) "1"))))
+                 (let ((n (string-to-number (nth 5 row))))
+                   (and (> n 0) n)))))
 
 (defun esqlite-file-tables (file)
   "Sqlite FILE tables"

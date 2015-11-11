@@ -37,7 +37,7 @@
   (esqlite-test-call/stream
    (lambda (stream)
      (should (esqlite-stream-execute stream "CREATE TABLE hoge (id INTEGER PRIMARY KEY, text TEXT)"))
-     (should (equal '((0 "id" "INTEGER" nil :null t) (1 "text" "TEXT" nil :null nil))
+     (should (equal '((0 "id" "INTEGER" nil :null 1) (1 "text" "TEXT" nil :null nil))
                     (esqlite-read-table-schema stream "hoge")))
      (should (esqlite-stream-execute stream "INSERT INTO hoge \nVALUES (1, 'a')"))
      (should (esqlite-stream-execute stream "INSERT INTO hoge \nVALUES (2, 'b')"))
@@ -145,8 +145,6 @@
      (should-error (esqlite-stream-async-execute stream "INSERT '") :type 'esqlite-unterminate-query)
      ;; terminate the previous statement (but error)
      (should-error (esqlite-stream-async-execute stream "'"))
-     ;;TODO  just wait a second (should serialize all query)
-     (sleep-for 1)
      (should (equal '(("1" "1" "1"))
                     (esqlite-stream-read stream "SELECT a,b,c FROM foo WHERE a = 1"))))))
 
@@ -185,6 +183,15 @@
        (should (equal '("id" "text" "date") (esqlite-read-table-columns file "hoge")))
        (should (equal '("hoge") (esqlite-read-all-objects stream)))
        ))))
+
+(ert-deftest normal-0009 ()
+  "Multiple keys"
+  :tags '(esqlite esqlite-stream)
+  (esqlite-test-call/stream
+   (lambda (stream)
+     (should (esqlite-stream-execute stream "CREATE TABLE hoge (id1 INTEGER, id2 INTEGER, text TEXT ,PRIMARY KEY(id1, id2))"))
+     (should (equal '((0 "id1" "INTEGER" nil :null 1) (1 "id2" "INTEGER" nil :null 2) (2 "text" "TEXT" nil :null nil))
+                    (esqlite-read-table-schema stream "hoge"))))))
 
 (ert-deftest irregular-0001 ()
   :tags '(esqlite esqlite-stream)
