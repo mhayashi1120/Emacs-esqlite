@@ -5,7 +5,7 @@
 ;; URL: https://github.com/mhayashi1120/Emacs-esqlite
 ;; Emacs: GNU Emacs 24 or later
 ;; Package-Requires: ((esqlite "0.2.0") (helm "20131207.845"))
-;; Version: 0.2.4
+;; Version: 0.3.0
 
 ;; This program is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU General Public License as
@@ -32,9 +32,7 @@
 
 ;;; Code:
 
-(eval-when-compile
-  (require 'cl))
-
+(require 'cl-lib)
 (require 'esqlite)
 (require 'pcsv)
 
@@ -65,7 +63,8 @@ Normally, should not override `candidates-process', `candidates',
 
 Following esqlite specific directive:
 
-* `sqlite-db' File name of sqlite database or esqlite stream.
+* `sqlite-db' File name of sqlite database or esqlite stream or
+   symbol point to filename.
 * `sqlite-async' Indicate SOURCE is async.
 
 You must choose `sqlite-table' or `sqlite-composer' directive.
@@ -103,8 +102,11 @@ Example:
       (setq file file-or-stream))
      ((esqlite-stream-p file-or-stream)
       (setq stream file-or-stream))
+     ((symbolp file-or-stream)
+      (setq file file-or-stream))
      (t
-      (error "esqlite-helm: Not a valid filename or stream sqlite-db:%s" file)))
+      (error "esqlite-helm: Not a valid filename or stream sqlite-db:%s"
+             file-or-stream)))
     (cond
      ((and composer (not (functionp composer)))
       (error "esqlite-helm: Not a valid function `sqlite-composer'"))
@@ -249,7 +251,7 @@ Example:
       (let* ((rawtext (concat (mapconcat 'identity candidates "\n") "\n"))
              (source (helm-get-current-source))
              (incomplete-info (assq 'incomplete-line source)))
-        (destructuring-bind (data rest) (esqlite-helm--read-csv rawtext)
+        (cl-destructuring-bind (data rest) (esqlite-helm--read-csv rawtext)
           (setcdr incomplete-info (concat rest (cdr incomplete-info)))
           data))
     (error
@@ -368,7 +370,7 @@ Above syntax can escape by \\ (backslash). But no relation to ESCAPE-CHAR.
 See related information at `esqlite-escape-like'.
 
 ESCAPE-CHAR pass to `esqlite-helm-glob-to-like'"
-  (destructuring-bind (prefix pattern suffix)
+  (cl-destructuring-bind (prefix pattern suffix)
       (esqlite-helm-split-fuzzy-glob glob (or escape-char ?\\))
     (concat
      (and prefix "%")
@@ -380,7 +382,7 @@ ESCAPE-CHAR pass to `esqlite-helm-glob-to-like'"
   "Convert GLOB to fuzzy glob to support helm behavior
 
 There are extended syntax `^' `$'. See `esqlite-helm-glob-to-fuzzy-like'."
-  (destructuring-bind (prefix pattern suffix)
+  (cl-destructuring-bind (prefix pattern suffix)
       (esqlite-helm-split-fuzzy-glob glob)
     (concat
      (and prefix "*")

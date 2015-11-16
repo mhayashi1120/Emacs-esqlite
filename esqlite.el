@@ -44,7 +44,7 @@
 ;; ## Install:
 
 ;; Please install sqlite command. (http://www.sqlite.org/)
-;; Please install this package from MELPA. (http://melpa.milkbox.net/)
+;; Please install this package from MELPA. (http://melpa.org/)
 
 ;; ## Usage:
 
@@ -55,9 +55,7 @@
 
 ;;; Code:
 
-(eval-when-compile
-  (require 'cl))
-
+(require 'cl-lib)
 (require 'pcsv)
 
 (defgroup esqlite ()
@@ -92,33 +90,33 @@ Default is the latest release of sqlite."
     (signal symbol (list msg))))
 
 (defun esqlite-parse-replace (string replace-table)
-  (loop with table = replace-table
-        with prev
-        with constructor =
-        (if (multibyte-string-p string)
-            'concat
-          (lambda (lis)
-            (apply 'unibyte-string lis)))
-        for c across string
-        concat (let ((pair (assq c table)))
-                 (cond
-                  ((not pair)
-                   (setq table replace-table)
-                   (prog1
-                       (funcall constructor (nreverse (cons c prev)))
-                     (setq prev nil)))
-                  ((stringp (cdr pair))
-                   (when (multibyte-string-p (cdr pair))
-                     (esqlite--error "Assert (must be a unibyte)"))
-                   (setq table replace-table)
-                   (setq prev nil)
-                   (cdr pair))
-                  ((consp (cdr pair))
-                   (setq prev (cons c prev))
-                   (setq table (cdr pair))
-                   nil)
-                  (t
-                   (esqlite--error "Assert (Not supported type)"))))))
+  (cl-loop with table = replace-table
+           with prev
+           with constructor =
+           (if (multibyte-string-p string)
+               'concat
+             (lambda (lis)
+               (apply 'unibyte-string lis)))
+           for c across string
+           concat (let ((pair (assq c table)))
+                    (cond
+                     ((not pair)
+                      (setq table replace-table)
+                      (prog1
+                          (funcall constructor (nreverse (cons c prev)))
+                        (setq prev nil)))
+                     ((stringp (cdr pair))
+                      (when (multibyte-string-p (cdr pair))
+                        (esqlite--error "Assert (must be a unibyte)"))
+                      (setq table replace-table)
+                      (setq prev nil)
+                      (cdr pair))
+                     ((consp (cdr pair))
+                      (setq prev (cons c prev))
+                      (setq table (cdr pair))
+                      nil)
+                     (t
+                      (esqlite--error "Assert (Not supported type)"))))))
 
 (defun esqlite-object= (s1 s2)
   "Return t if object name is equals in database."
@@ -136,9 +134,9 @@ Default is the latest release of sqlite."
 
 (defun esqlite-object-rassoc (key alist)
   "`rassoc' with ignore case"
-  (loop for cell in alist
-        if (esqlite-object= key (cdr-safe cell))
-        return cell))
+  (cl-loop for cell in alist
+           if (esqlite-object= key (cdr-safe cell))
+           return cell))
 
 (defun esqlite-trim (text)
   "Remove head/tail whitespaces from TEXT.
@@ -190,7 +188,7 @@ http://www.sqlite.org/uri.html
 
 (defun esqlite-uri-to-filename (uri)
   "Extract filename from URI."
-  (destructuring-bind (file _)
+  (cl-destructuring-bind (file _)
       (esqlite-uri-parse uri)
     file))
 
@@ -266,30 +264,30 @@ Please download and install fakecygpty (Google it!!)"
 ;; * base64 encode 16 bytes -> 44 chars
 ;; * to trim last `=', only use md5 first 15 bytes make (* 4 (/ 15 3)) 20 bytes
 (defun esqlite--random-text (seed length)
-  (loop for i from 0 to (/ (1- length) 20)
-        concat (md5 (format "%d:%s:%s" i (current-time) seed))
-        into hash
-        finally return
-         ;; only first 15 bytes
-        (loop for i from 0 below (- (length hash) 2) by 2
-              ;; make random unibyte string
-              collect (let ((hex (substring hash i (+ i 2))))
-                        (string-to-number hex 16))
-              into res
-              finally return
-              ;; md5 hex fold to base64 area
-              (let* ((unibytes (apply 'unibyte-string res))
-                     (b64 (base64-encode-string unibytes t)))
-                (substring b64 0 length)))))
+  (cl-loop for i from 0 to (/ (1- length) 20)
+           concat (md5 (format "%d:%s:%s" i (current-time) seed))
+           into hash
+           finally return
+           ;; only first 15 bytes
+           (cl-loop for i from 0 below (- (length hash) 2) by 2
+                    ;; make random unibyte string
+                    collect (let ((hex (substring hash i (+ i 2))))
+                              (string-to-number hex 16))
+                    into res
+                    finally return
+                    ;; md5 hex fold to base64 area
+                    (let* ((unibytes (apply 'unibyte-string res))
+                           (b64 (base64-encode-string unibytes t)))
+                      (substring b64 0 length)))))
 
 (defun esqlite-unique-name (stream prefix &optional seed)
-  (loop with objects = (esqlite-read-all-objects stream)
-        with full-name
-        while (let ((random-text (esqlite--random-text
-                                  (or seed "") 40)))
-                (setq full-name (format "%s_%s" prefix random-text))
-                (member full-name objects))
-        finally return full-name))
+  (cl-loop with objects = (esqlite-read-all-objects stream)
+           with full-name
+           while (let ((random-text (esqlite--random-text
+                                     (or seed "") 40)))
+                   (setq full-name (format "%s_%s" prefix random-text))
+                   (member full-name objects))
+           finally return full-name))
 
 (defconst esqlite-control-code-regexp
   "[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -638,9 +636,9 @@ NOTE: If BLOB data contains non text byte (null-byte), this
   with this function.
 This function is not checking hex is valid."
   (apply 'unibyte-string
-         (loop for start from 0 below (length hex) by 2
-               for end from (if (eq (logand (length hex) 1) 1) 1 2) by 2
-               collect (string-to-number (substring hex start end) 16))))
+         (cl-loop for start from 0 below (length hex) by 2
+                  for end from (if (eq (logand (length hex) 1) 1) 1 2) by 2
+                  collect (string-to-number (substring hex start end) 16))))
 
 ;;
 ;; sleep in process filter
@@ -650,13 +648,13 @@ This function is not checking hex is valid."
   ;;FIXME
   ;; This check calculate response of external command which does not accept
   ;; from process output.
-  (apply 'min (loop for _ in '(1 2 3 4 5)
-                    collect
-                    (let ((start (float-time)))
-                      ;; probablly every system have "echo" ...
-                      (call-process "echo" nil nil nil "1")
-                      (let ((end (float-time)))
-                        (- end start))))))
+  (apply 'min (cl-loop for _ in '(1 2 3 4 5)
+                       collect
+                       (let ((start (float-time)))
+                         ;; probablly every system have "echo" ...
+                         (call-process "echo" nil nil nil "1")
+                         (let ((end (float-time)))
+                           (- end start))))))
 
 (defun esqlite-sleep (_dummy)
   ;; Other code affect to buffer while `sleep-for'.
@@ -728,12 +726,12 @@ This function is not checking hex is valid."
     (unless (bolp)
       (goto-char first)
       (signal 'invalid-read-syntax nil))
-    (loop for datum in line
-          collect
-          ;; handling `esqlite--temp-null'
-          (if (equal datum null)
-              :null
-            datum))))
+    (cl-loop for datum in line
+             collect
+             ;; handling `esqlite--temp-null'
+             (if (equal datum null)
+                 :null
+               datum))))
 
 (defun esqlite--read-csv-line-with-deletion (null)
   (when (memq system-type '(
@@ -1086,17 +1084,17 @@ Format directive is same as `esqlite-prepare'
        ,@form)))
 
 (defun esqlite-stream--reuse-memory (key)
-  (loop for p in (process-list)
-        if (and (esqlite-stream-alive-p p)
-                (eq (esqlite-stream-memory-key p) key))
-        return p))
+  (cl-loop for p in (process-list)
+           if (and (esqlite-stream-alive-p p)
+                   (eq (esqlite-stream-memory-key p) key))
+           return p))
 
 (defun esqlite-stream--reuse-file (file)
-  (loop with filename = (esqlite--safe-expand-file file)
-        for p in (process-list)
-        if (and (esqlite-stream-alive-p p)
-                (string= (esqlite-stream-filename p) filename))
-        return p))
+  (cl-loop with filename = (esqlite--safe-expand-file file)
+           for p in (process-list)
+           if (and (esqlite-stream-alive-p p)
+                   (string= (esqlite-stream-filename p) filename))
+           return p))
 
 (defun esqlite-stream--open (file-or-key)
   (esqlite--check-async-interface)
@@ -1120,7 +1118,7 @@ Format directive is same as `esqlite-prepare'
                 (or (= done-count 0)
                     (< done-count expected-cont)))
       (esqlite-sleep proc)
-      (destructuring-bind (prompt-count errmsg)
+      (cl-destructuring-bind (prompt-count errmsg)
           (esqlite--read-syntax-error-at-point)
         (setq done-count (+ done-count prompt-count))
         (when (stringp errmsg)
@@ -1280,7 +1278,7 @@ Optional REUSE indicate get having been opened stream.
 WARNING: This function return process as `esqlite-stream' object,
  but do not use this as a process object. This object style
  may be changed in future release."
-  (check-type file string)
+  (cl-check-type file string)
   (esqlite-check-sqlite-program)
   (or (and reuse
            (esqlite-stream--reuse-file file))
@@ -1297,7 +1295,7 @@ e.g.
 \(esqlite-stream-send-command stream \"backup\" \"filename.sqlite\")
 
 See other information at `esqlite-stream-open'."
-  (and key (check-type key symbol))
+  (and key (cl-check-type key symbol))
   (esqlite-check-sqlite-program)
   (cond
    ((null key)
@@ -1445,7 +1443,7 @@ Both DECODING/ENCODING are ommited, revert to default encoding/decoding."
     (let ((filter (process-get proc 'esqlite-async-filter))
           (errmsg (process-get proc 'esqlite-syntax-error)))
       (unless errmsg
-        (destructuring-bind (prompt-count err)
+        (cl-destructuring-bind (prompt-count err)
             (esqlite--read-syntax-error-at-point)
           (setq errmsg (or err t))
           (process-put proc 'esqlite-syntax-error errmsg)
@@ -1572,7 +1570,7 @@ WARNINGS: See `esqlite-hex-to-bytes'."
            (exit-code (apply 'esqlite-call-csv-process
                              file query nullvalue args)))
       (goto-char (point-min))
-      (destructuring-bind (prompt-count errmsg)
+      (cl-destructuring-bind (prompt-count errmsg)
           (esqlite--read-syntax-error-at-point)
         (cond
          ((not (stringp errmsg)))
@@ -1661,8 +1659,8 @@ SELECT item FROM hoge
 
 ;;;###autoload
 (defun esqlite-read-table-columns (stream-or-file table)
-  (loop for (_r1 col . _ignore) in (esqlite-read-table-schema stream-or-file table)
-        collect col))
+  (cl-loop for (_r1 col . _ignore) in (esqlite-read-table-schema stream-or-file table)
+           collect col))
 
 ;;;###autoload
 (defun esqlite-read-table-schema (stream-or-file table)
@@ -1674,22 +1672,22 @@ Elements of the item list are:
 3. not null (boolean)
 4. default_value
 5. primary key order start from 1 (integer)"
-  (loop with reader = (if (esqlite-stream-p stream-or-file)
-                          'esqlite-stream-read
-                        'esqlite-read)
-        for row in (funcall
-                    reader stream-or-file
-                    (esqlite-prepare
-                     "PRAGMA table_info(%o{table})"
-                     :table table))
-        collect (list
-                 (string-to-number (nth 0 row))
-                 (downcase (nth 1 row))
-                 (upcase (nth 2 row))
-                 (equal (nth 3 row) "1")
-                 (nth 4 row)
-                 (let ((n (string-to-number (nth 5 row))))
-                   (and (> n 0) n)))))
+  (cl-loop with reader = (if (esqlite-stream-p stream-or-file)
+                             'esqlite-stream-read
+                           'esqlite-read)
+           for row in (funcall
+                       reader stream-or-file
+                       (esqlite-prepare
+                        "PRAGMA table_info(%o{table})"
+                        :table table))
+           collect (list
+                    (string-to-number (nth 0 row))
+                    (downcase (nth 1 row))
+                    (upcase (nth 2 row))
+                    (equal (nth 3 row) "1")
+                    (nth 4 row)
+                    (let ((n (string-to-number (nth 5 row))))
+                      (and (> n 0) n)))))
 
 (defun esqlite-file-tables (file)
   "Sqlite FILE tables"
