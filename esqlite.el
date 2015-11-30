@@ -5,7 +5,7 @@
 ;; URL: https://github.com/mhayashi1120/Emacs-esqlite
 ;; Emacs: GNU Emacs 24 or later
 ;; Package-Requires: ((pcsv "1.3.3"))
-;; Version: 0.3.0
+;; Version: 0.3.1
 
 ;; This program is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU General Public License as
@@ -308,7 +308,7 @@ Please download and install fakecygpty (Google it!!)"
 (defun esqlite--terminate-statement (sql)
   (esqlite--check-control-code sql)
   (cond
-   ((not (string-match ";[ \t\n]*\\'" sql))
+   ((not (string-match ";[\s\t\n]*\\'" sql))
     (concat sql ";\n"))
    ((not (string-match "\n\\'" sql))
     (concat sql "\n"))
@@ -656,13 +656,13 @@ This function is not checking hex is valid."
                          (let ((end (float-time)))
                            (- end start))))))
 
-(defun esqlite-sleep (_dummy)
+(defun esqlite-sleep (proc)
   ;; Other code affect to buffer while `sleep-for'.
   ;; TODO why need save-excursion? timer? filter? I can't get clue.
   (save-excursion
     ;; Achieve like a asynchronous behavior (ex: draw mode line)
     (redisplay)
-    (sleep-for esqlite-sleep-second)))
+    (accept-process-output proc esqlite-sleep-second)))
 
 ;;
 ;; handling sqlite prompt
@@ -676,6 +676,7 @@ This function is not checking hex is valid."
          (match-beginning 1))
     (replace-match "" nil nil nil 1)))
 
+;; delete continue prompt and return its count
 (defun esqlite--try-to-delete-continue ()
   (let ((i 0))
     (catch 'done
@@ -941,7 +942,7 @@ e.g.
 %t: escape text
 %T: same as %t but with quote
 %l: escape LIKE pattern escape char is '\\'
-%L: similar to %l but with quoting/escaping and ESCAPE statement
+%L: similar to %l except that with quoting/escaping and ESCAPE statement
 %o: escape db object with quote
 %O: escape db objects with quote (joined by \", \")
 %V: escape sql value(s) with quote if need
@@ -1108,26 +1109,56 @@ Format directive is same as `esqlite-prepare'
     (esqlite-stream--wait-first-prompt stream)
     stream))
 
+(defvar esqlite-stream--check-hang-count 3
+  "Threshold to check error message several time to call `accept-process-output'.")
+
 (defun esqlite-stream--maybe-error (proc query)
-  (let ((done-count 0)
+  (let ((done 0)
         ;; Every newline get a prompt/continue.
-        ;; But ignore last line. Last line have next new prompt.
-        (expected-cont (- (length (split-string query "\n")) 2)))
-    (while (and (eq (process-status proc) 'run)
-                (not (esqlite--prompt-p))
-                (or (= done-count 0)
-                    (< done-count expected-cont)))
-      (esqlite-sleep proc)
-      (cl-destructuring-bind (prompt-count errmsg)
-          (esqlite--read-syntax-error-at-point)
-        (setq done-count (+ done-count prompt-count))
-        (when (stringp errmsg)
-          (esqlite--error "%s" errmsg))
-        (when (> done-count expected-cont)
-          (process-put proc 'esqlite-stream-continue-prompt t)
-          (esqlite--fatal 'esqlite-unterminate-query
-                          "Unterminated query"))
-        (process-put proc 'esqlite-stream-continue-prompt nil)))))
+        ;; Why -2 ?
+        ;; 1. Ignore last prompt. Last one is next new prompt.
+        ;; 2. And QUERY must have last newline "SELECT 1;\n"
+        ;;  `split-string' generate empty string at last. Ignore this one.
+        (expected (- (length (split-string query "\n")) 2))
+        (stall-point)
+        (count-hang 0)
+        promptp)
+    (catch 'done
+      (while (eq (process-status proc) 'run)
+        (esqlite-sleep proc)
+        (process-put proc 'esqlite-stream-continue-prompt nil)
+        (cl-destructuring-bind (prompt-count errmsg)
+            (esqlite--read-syntax-error-at-point)
+          (setq done (+ done prompt-count))
+          (when (stringp errmsg)
+            (esqlite--error "%s" errmsg))
+          (setq promptp (esqlite--prompt-p))
+          (when (and (< expected done)
+                     (not promptp))
+            (process-put proc 'esqlite-stream-continue-prompt t)
+            (esqlite--fatal 'esqlite-unterminate-query
+                            "Unterminated query")))
+        (when (and promptp
+                   (= expected done))
+          (throw 'done t))
+        ;; check compound statements prompt just in case.
+        ;; compound statements is not supported. but should never hang the stream process.
+        ;; check `esqlite-stream--check-hang-count' time stream is freezing or not.
+        ;; e.g. QUERY: "select\n 1;\nselect\n2\n;\nselect 3;\n"
+        ;;    This should be read as '(("1") ("2") ("3"))
+        ;;    But each of statement generate `esqlite--prompt'before next statement.
+        ;;    And don't forget that continue prompt `esqlite--prompt-continue' after send newline.
+        ;;    This simple example seems working well, but if 1st statement is too complex, so
+        ;;    spend too many seconds, this completely freezing before next 2nd statement.
+        ;;    In this case, cannot read 2nd, 3rd statement "Error:" message from PROC
+        (if (and stall-point
+                 (= stall-point (point-max-marker)))
+            (setq count-hang (1+ count-hang))
+          ;; reset count
+          (setq count-hang 0))
+        (setq stall-point (point-max-marker))
+        (when (<= esqlite-stream--check-hang-count count-hang)
+          (throw 'done t))))))
 
 (defun esqlite-stream--filter (proc event)
   (esqlite--with-parse proc event
@@ -1335,7 +1366,7 @@ If QUERY is a meta-command just send the command to STREAM.
 If QUERY is a sql statement, wait until prompt return just `t'."
   (esqlite-stream-check-alive stream)
   (cond
-   ((string-match "\\`[ \t\n]*\\." query)
+   ((string-match "\\`[\s\t\n]*\\." query)
     (esqlite-stream--send-command-0 stream query))
    (t
     (esqlite-stream--send-sql-0 stream query))))
@@ -1344,7 +1375,7 @@ If QUERY is a sql statement, wait until prompt return just `t'."
   "Execute QUERY in STREAM."
   (esqlite-stream-check-alive stream)
   (cond
-   ((string-match "\\`[ \t\n]*\\." query)
+   ((string-match "\\`[\s\t\n]*\\." query)
     (esqlite-stream--send-command-0 stream query t))
    (t
     (esqlite-stream--send-sql-0 stream query t))))

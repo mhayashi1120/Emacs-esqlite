@@ -3,6 +3,7 @@
 
 (require 'ert)
 (require 'cl)
+(require 'cl-lib)
 
 (defun esqlite-test-wait-exit (process)
   (while (eq (process-status process) 'run) (sleep-for 0.01)))
