@@ -436,6 +436,29 @@
   (should (equal "SELECT\n1" (esqlite-prepare '("SELECT" "1"))))
   )
 
+(ert-deftest prepare-0002 ()
+  :tags '(esqlite)
+  ;; accept list of string as FMT
+  (should (equal (esqlite-prepare '("SELECT 1" " FROM dummy")) "SELECT 1\n FROM dummy"))
+  )
+
+(ert-deftest prepare-0003 ()
+  :tags '(esqlite)
+  ;; 2 time prepared statement working well
+  ;; "%v{val}" is a fancy table name :-)
+  (let ((prepared-statement
+         ;; first, create basic statement.
+         (esqlite-prepare
+          "SELECT %O{columns}  FROM %o{table}  WHERE %o{col} = %V{val}"
+          :columns '("a" "b")
+          :table "%v{val}"
+          :col "a")))
+    (should (equal
+             (esqlite-prepare
+              prepared-statement
+              :val "value")
+             "SELECT \"a\", \"b\"  FROM \"%v{val}\"  WHERE \"a\" = 'value'"))))
+
 (ert-deftest number-0001 ()
   :tags '(esqlite)
   (should (esqlite-numeric-text-p "1"))

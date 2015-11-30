@@ -926,12 +926,14 @@ To create the like pattern:
 
 ;;;###autoload
 (defun esqlite-prepare (fmt &rest keywords)
-  "Prepare sql with FMT like `format'.
+  "Prepare SQL with FMT like `format'.
+Prepared SQL statement may contain a text-property `esqlite-prepared'
+ which should not be removed by programmer.
 
 FMT is a string or list of string.
  each list item join with newline.
 
-Each directive accept arg which contains keyword name.
+Following each directive accept arg which contains keyword name.
   Undefined keyword is simply ignored.
 e.g.
 \(esqlite-prepare \"SELECT * FROM %o{some-table} WHERE id = %s{some-value}\"\
