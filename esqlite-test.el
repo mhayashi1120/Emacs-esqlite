@@ -1,8 +1,7 @@
-;; -*- coding: utf-8 -*-
+;; -*- coding: utf-8 lexical-binding: t -*-
 ;;TODO switch esqlite command version.
 
 (require 'ert)
-(require 'cl)
 (require 'cl-lib)
 
 (defun esqlite-test-wait-exit (process)
@@ -29,7 +28,13 @@
 (defun esqlite-test-file-unreadable (file)
   (cond
    ((memq system-type '(windows-nt))
-    (call-process-shell-command (format "icacls.exe  %s /deny `whoami`:F" file)))
+    (let ((user (let ((output (shell-command-to-string "whoami")))
+                  (if (string-match "[\n\t\s]+\\'" output)
+                      (substring output 0 (match-beginning 0))
+                      output))))
+      (call-process-shell-command (format "icacls.exe  %s /deny %s:F"
+                                          file
+                                          (shell-quote-argument user)))))
    (t
     (set-file-modes file ?\000))))
 
@@ -266,7 +271,7 @@
                       (format "INSERT INTO hoge VALUES(%d);" n))
                     (number-sequence 1 5)) "")))
        (esqlite-async-read db query (lambda (x)))
-       (lexical-let ((result '()))
+       (let ((result '()))
          (esqlite-async-read
           db "SELECT id FROM hoge;"
           (lambda (x)

@@ -1152,7 +1152,7 @@ Format directive is same as `esqlite-prepare'
         ;;    And don't forget that continue prompt `esqlite--prompt-continue' after send newline.
         ;;    This simple example seems working well, but if 1st statement is too complex, so
         ;;    spend too many seconds, this completely freezing before next 2nd statement.
-        ;;    In this case, cannot read 2nd, 3rd statement "Error:" message from PROC
+        ;;    In this case, may not read 2nd, 3rd statement "Error:" message from PROC
         (if (and stall-point
                  (= stall-point (point-max-marker)))
             (setq count-hang (1+ count-hang))
