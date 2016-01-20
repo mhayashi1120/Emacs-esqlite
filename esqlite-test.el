@@ -38,9 +38,9 @@
    (t
     (set-file-modes file ?\000))))
 
-(ert-deftest show-command ()
+(ert-deftest -show-command ()
   :tags '(esqlite)
-  (message "sqlite command version is %s" (esqlite-sqlite-version)))
+  (message "sqlite command version is `%s'" (esqlite-sqlite-version)))
 
 (ert-deftest normal-0001 ()
   :tags '(esqlite esqlite-stream)
@@ -200,7 +200,12 @@
   (esqlite-test-call/stream
    (lambda (stream)
      (should (esqlite-stream-execute stream "CREATE TABLE hoge (id1 INTEGER, id2 INTEGER, text TEXT ,PRIMARY KEY(id1, id2))"))
-     (should (equal '((0 "id1" "INTEGER" nil :null 1) (1 "id2" "INTEGER" nil :null 2) (2 "text" "TEXT" nil :null nil))
+     (should (equal (cond
+                     ;; at least 3.7.17 or later, PRAGMA table_info return PRIMARY KEY as integer sequence
+                     ((version< (esqlite-sqlite-version) "3.7.17")
+                      '((0 "id1" "INTEGER" nil :null 1) (1 "id2" "INTEGER" nil :null 1) (2 "text" "TEXT" nil :null nil)))
+                     (t
+                      '((0 "id1" "INTEGER" nil :null 1) (1 "id2" "INTEGER" nil :null 2) (2 "text" "TEXT" nil :null nil))))
                     (esqlite-read-table-schema stream "hoge"))))))
 
 (ert-deftest irregular-0001 ()
