@@ -30,6 +30,7 @@ check-developer :
 	./test/all-test.sh
 
 compile:
+	$(EMACS) --version
 	$(EMACS) -q -batch -L . -L Emacs-pcsv \
 	     -f batch-byte-compile $(RELEASE_FILES)
 

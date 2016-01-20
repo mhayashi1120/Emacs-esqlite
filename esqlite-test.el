@@ -38,6 +38,10 @@
    (t
     (set-file-modes file ?\000))))
 
+(ert-deftest show-command ()
+  :tags '(esqlite)
+  (message "sqlite command version is %s" (esqlite-sqlite-version)))
+
 (ert-deftest normal-0001 ()
   :tags '(esqlite esqlite-stream)
   (esqlite-test-call/stream
