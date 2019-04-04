@@ -648,13 +648,13 @@ This function is not checking hex is valid."
   ;;FIXME
   ;; This check calculate response of external command which does not accept
   ;; from process output.
-  (apply 'min (cl-loop for _ in '(1 2 3 4 5)
-                       collect
-                       (let ((start (float-time)))
-                         ;; probablly every system have "echo" ...
-                         (call-process "echo" nil nil nil "1")
-                         (let ((end (float-time)))
-                           (- end start))))))
+  (cl-loop repeat 5 minimizing
+           (let ((start (float-time)))
+             ;; Probably every system has "echo", `windows-nt'
+             ;; systems don't have an external echo program, but the
+             ;; shell does have an internal "echo" command.
+             (call-process-shell-command "echo 1")
+             (- (float-time) start))))
 
 (defun esqlite-sleep (proc)
   ;; Other code affect to buffer while `sleep-for'.
