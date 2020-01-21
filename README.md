@@ -44,7 +44,7 @@ sample:
 
 ```
 (esqlite-async-read "database.sqlite" "SELECT * FROM hoge"
-   (lambda (data) (message "%s" (mapcocnat 'identity data ", "))))
+   (lambda (data) (message "%s" (mapconcat 'identity data ", "))))
 ```
 
 ### Read DB schema
